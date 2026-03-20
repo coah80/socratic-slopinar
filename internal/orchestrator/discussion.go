@@ -122,13 +122,20 @@ func systemPrompt(prompt, codebasePath string, thisModel string, allModels []str
 			"- \"wait actually i just checked the code and there's already a...\"\n"+
 			"- \"disagree, the latency would be terrible\"\n\n"+
 			"NEVER say: \"I'd be happy to\", \"Great question\", \"Shall I proceed\", "+
-			"\"Let me break this down\", \"Absolutely\", \"That's a fantastic point\"\n\n"+
+			"\"Let me break this down\", \"Absolutely\", \"That's a fantastic point\", "+
+			"\"Based on my exploration\", \"Here's what I found\", \"Let me provide\"\n"+
+			"NEVER use markdown headers (##) or bullet point analysis. Just talk normally.\n\n"+
+			"SHARED NOTES:\n"+
+			"The group has a shared notes document (markdown). This is your team's living doc.\n"+
+			"Use update_notes to add decisions, plans, and findings. Keep it organized.\n"+
+			"If your context gets compacted, the notes will tell you everything discussed so far.\n"+
+			"Treat the notes like a collaborative google doc - add to it, restructure it, keep it clean.\n\n"+
 			"RULES:\n"+
 			"- You are %s. Don't confuse yourself with anyone else.\n"+
 			"- 2-4 sentences max. Be concise.\n"+
 			"- Use tools SPARINGLY - max 1-2 per turn. Don't explore the whole codebase.\n"+
 			"- Only read a file if you need specific info to make your point.\n"+
-			"- When the group has a plan, use update_notes to write it down.\n"+
+			"- ACTIVELY use update_notes to record decisions and plans as you discuss.\n"+
 			"- Push back on bad ideas. Hype good ones. Be real.\n\n"+
 			"DO NOT:\n"+
 			"- Offer to implement anything. You're planning, not coding.\n"+
@@ -142,6 +149,40 @@ func systemPrompt(prompt, codebasePath string, thisModel string, allModels []str
 }
 
 const maxToolCallsPerTurn = 5
+
+func chatWithRetry(ctx context.Context, client *openrouter.Client, modelID string, messages []openrouter.ChatMessage, tools []openrouter.ToolDefinition, displayName string, discID string) (openrouter.ChatResponse, error) {
+	resp, err := client.Chat(ctx, openrouter.ChatRequest{
+		Model:    modelID,
+		Messages: messages,
+		Tools:    tools,
+	})
+	if err == nil {
+		return resp, nil
+	}
+
+	log.Printf("[DISC %s] [%s] error: %s, retrying with trimmed context + no tools", discID, displayName, err.Error())
+	if len(messages) <= 2 {
+		return resp, err
+	}
+
+	sys := messages[0]
+	rest := messages[1:]
+	keep := 6
+	if keep > len(rest) {
+		keep = len(rest)
+	}
+	trimmed := append([]openrouter.ChatMessage{sys}, rest[len(rest)-keep:]...)
+	log.Printf("[DISC %s] [%s] retry: %d msgs (was %d), no tools", discID, displayName, len(trimmed), len(messages))
+
+	resp2, err2 := client.Chat(ctx, openrouter.ChatRequest{
+		Model:    modelID,
+		Messages: trimmed,
+	})
+	if err2 != nil {
+		return resp, fmt.Errorf("retry also failed: %w", err2)
+	}
+	return resp2, nil
+}
 
 func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBroadcast func(Event)) {
 	nameMap := buildNameMap(disc.Models)
@@ -187,11 +228,7 @@ func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBro
 			}
 			currentMessages := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
 
-			resp, err := client.Chat(ctx, openrouter.ChatRequest{
-				Model:    modelID,
-				Messages: currentMessages,
-				Tools:    toolDefs,
-			})
+			resp, err := chatWithRetry(ctx, client, modelID, currentMessages, toolDefs, nameMap[modelID], disc.ID)
 			if err != nil {
 				log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[modelID], err.Error())
 				broadcast(Event{Type: "error", ModelID: modelID, Content: err.Error()})
@@ -210,7 +247,7 @@ func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBro
 	}
 
 	log.Printf("[DISC %s] Generating execution prompt", disc.ID)
-	execPrompt := generateExecutionPrompt(ctx, client, disc.Models, messages, notes, toolDefs)
+	execPrompt := generateExecutionPrompt(ctx, client, disc.Models, messages, notes)
 	broadcast(Event{Type: "execution_prompt", Content: execPrompt})
 	broadcast(Event{Type: "status", Content: "done"})
 	log.Printf("[DISC %s] Done", disc.ID)
@@ -360,41 +397,67 @@ func generateExecutionPrompt(
 	models []string,
 	messages []openrouter.ChatMessage,
 	notes string,
-	toolDefs []openrouter.ToolDefinition,
 ) string {
-	if len(models) == 0 || notes == "" {
+	if len(models) == 0 {
 		return notes
 	}
-	summarizer := models[0]
-	summaryMessages := append(cloneMessages(messages), openrouter.ChatMessage{
+	if strings.TrimSpace(notes) == "" {
+		notes = "(no notes were recorded during the discussion)"
+	}
+
+	last10 := messages
+	if len(last10) > 10 {
+		last10 = last10[len(last10)-10:]
+	}
+
+	summaryMessages := []openrouter.ChatMessage{
+		{Role: "system", Content: "You are a technical writer. Synthesize discussion notes into a clear execution prompt."},
+	}
+	summaryMessages = append(summaryMessages, last10...)
+	summaryMessages = append(summaryMessages, openrouter.ChatMessage{
 		Role: "user",
-		Content: "Based on the discussion and shared notes, generate a clear, actionable execution prompt " +
+		Content: "Based on the discussion and shared notes below, generate a clear, actionable execution prompt " +
 			"that another AI could use to implement the plan. Include specific file paths, code changes, " +
 			"and steps. Output only the prompt, no preamble.\n\nShared notes:\n" + notes,
 	})
-	resp, err := client.Chat(ctx, openrouter.ChatRequest{
-		Model:    summarizer,
-		Messages: summaryMessages,
-		Tools:    toolDefs,
-	})
-	if err != nil {
-		return notes
-	}
-	if len(resp.Choices) > 0 && resp.Choices[0].Message.Content != "" {
-		return resp.Choices[0].Message.Content
+
+	for _, modelID := range models {
+		resp, err := client.Chat(ctx, openrouter.ChatRequest{
+			Model:    modelID,
+			Messages: summaryMessages,
+		})
+		if err != nil {
+			log.Printf("[EXEC] %s failed: %s, trying next model", modelID, err.Error())
+			continue
+		}
+		if len(resp.Choices) > 0 && resp.Choices[0].Message.Content != "" {
+			return resp.Choices[0].Message.Content
+		}
 	}
 	return notes
 }
 
-const maxContextMessages = 30
+const maxContextMessages = 25
 
 func withNotesContext(messages []openrouter.ChatMessage, notes string) []openrouter.ChatMessage {
 	trimmed := messages
+	wasCompacted := false
 	if len(trimmed) > maxContextMessages {
 		trimmed = trimmed[len(trimmed)-maxContextMessages:]
+		wasCompacted = true
 	}
 	cloned := cloneMessages(trimmed)
-	if strings.TrimSpace(notes) != "" {
+
+	if wasCompacted && strings.TrimSpace(notes) != "" {
+		catchup := openrouter.ChatMessage{
+			Role: "user",
+			Content: "[Context was compacted - earlier messages were removed to save space. " +
+				"The shared notes below contain everything discussed so far. " +
+				"Read them and continue the discussion from where it left off.]\n\n" +
+				"[Shared Notes]\n" + notes,
+		}
+		cloned = append([]openrouter.ChatMessage{catchup}, cloned...)
+	} else if strings.TrimSpace(notes) != "" {
 		cloned = append(cloned, openrouter.ChatMessage{
 			Role:    "user",
 			Content: "[Shared Notes]\n" + notes,
