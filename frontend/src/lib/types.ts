@@ -53,12 +53,10 @@ export const PROVIDERS = [
 	{ id: 'groq', name: 'Groq', color: '#f55036' },
 	{ id: 'together', name: 'Together', color: '#5046e5' },
 	{ id: 'minimax', name: 'MiniMax', color: '#7c3aed' },
-	{ id: 'cohere', name: 'Cohere', color: '#39594d' },
 	{ id: 'fireworks', name: 'Fireworks', color: '#ff6b35' },
 	{ id: 'cerebras', name: 'Cerebras', color: '#ff4f00' },
 	{ id: 'sambanova', name: 'SambaNova', color: '#f97316' },
 	{ id: 'moonshot', name: 'Moonshot', color: '#1a56db' },
-	{ id: 'novita', name: 'Novita', color: '#8b5cf6' },
 ] as const;
 
 export type ProviderId = typeof PROVIDERS[number]['id'];
@@ -75,13 +73,11 @@ const MODEL_PREFIX_MAP: Record<string, ProviderId> = {
 	'groq/': 'groq',
 	'together/': 'together',
 	'minimax/': 'minimax',
-	'cohere/': 'cohere',
 	'fireworks/': 'fireworks',
 	'cerebras/': 'cerebras',
 	'sambanova/': 'sambanova',
 	'moonshot/': 'moonshot',
 	'moonshotai/': 'moonshot',
-	'novita/': 'novita',
 };
 
 export function getProviderForModel(modelId: string): ProviderId {

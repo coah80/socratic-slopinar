@@ -95,15 +95,6 @@ var AllProviders = []Provider{
 		StripPrefix: true,
 	},
 	{
-		ID:          "cohere",
-		Name:        "Cohere",
-		BaseURL:     "https://api.cohere.ai/compatibility/v1/chat/completions",
-		AuthHeader:  "Authorization",
-		AuthPrefix:  "Bearer ",
-		Prefixes:    []string{"cohere/", "command-"},
-		StripPrefix: true,
-	},
-	{
 		ID:          "fireworks",
 		Name:        "Fireworks",
 		BaseURL:     "https://api.fireworks.ai/inference/v1/chat/completions",
@@ -137,15 +128,6 @@ var AllProviders = []Provider{
 		AuthHeader:  "Authorization",
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"moonshot/", "moonshotai/", "kimi-"},
-		StripPrefix: true,
-	},
-	{
-		ID:          "novita",
-		Name:        "Novita",
-		BaseURL:     "https://api.novita.ai/openai/chat/completions",
-		AuthHeader:  "Authorization",
-		AuthPrefix:  "Bearer ",
-		Prefixes:    []string{"novita/"},
 		StripPrefix: true,
 	},
 }
