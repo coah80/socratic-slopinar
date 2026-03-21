@@ -40,12 +40,32 @@
 		<circle cx="12" cy="12" r="8" stroke={info.color} stroke-width="2" />
 	</svg>
 {:else}
-	<img
-		{src}
-		alt={info.name}
-		width={size}
-		height={size}
-		onerror={() => failed = true}
-		style="display:inline-block;vertical-align:middle;filter:drop-shadow(0 0 0 transparent);"
-	/>
+	<span
+		class="provider-icon"
+		style="
+			display:inline-block;
+			width:{size}px;
+			height:{size}px;
+			background-color:{info.color};
+			-webkit-mask-image:url({src});
+			mask-image:url({src});
+			-webkit-mask-size:contain;
+			mask-size:contain;
+			-webkit-mask-repeat:no-repeat;
+			mask-repeat:no-repeat;
+			-webkit-mask-position:center;
+			mask-position:center;
+			vertical-align:middle;
+			flex-shrink:0;
+		"
+	>
+		<img
+			{src}
+			alt=""
+			width="0"
+			height="0"
+			style="display:none;"
+			onerror={() => failed = true}
+		/>
+	</span>
 {/if}
