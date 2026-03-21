@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -153,20 +154,8 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	defer conn.CloseNow()
 	conn.SetReadLimit(1024 * 1024)
 
+	log.Printf("[WS] connection accepted")
 	ctx := r.Context()
-
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				conn.Ping(ctx)
-			}
-		}
-	}()
 
 	var req discussRequest
 	if err := wsjson.Read(ctx, conn, &req); err != nil {
@@ -204,16 +193,39 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	broadcast := func(event orchestrator.Event) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		_ = wsjson.Write(discCtx, conn, event)
+		if err := wsjson.Write(discCtx, conn, event); err != nil {
+			log.Printf("[WS] write error: %v", err)
+			cancel()
+		}
 	}
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-discCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.Ping(discCtx); err != nil {
+					log.Printf("[WS] ping failed: %v", err)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
 	go func() {
 		for {
 			var msg clientMessage
 			if err := wsjson.Read(ctx, conn, &msg); err != nil {
+				log.Printf("[WS] read error (client disconnect?): %v", err)
+				cancel()
 				return
 			}
 			if msg.Action == "stop" {
+				log.Printf("[WS] client requested stop")
 				cancel()
 				return
 			}
@@ -224,6 +236,7 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	disc := orchestrator.NewDiscussion(discID, req.Prompt, req.CodebasePath, cfg.Models, req.Rounds)
 	orchestrator.Run(discCtx, disc, client, broadcast)
 
+	log.Printf("[WS] discussion complete, closing connection")
 	conn.Close(websocket.StatusNormalClosure, "discussion complete")
 }
 

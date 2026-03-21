@@ -15,6 +15,7 @@ import (
 func main() {
 	dev := flag.Bool("dev", false, "dev mode - proxy to frontend dev server instead of embedded files")
 	port := flag.String("port", "8080", "port to listen on")
+	noBrowser := flag.Bool("no-browser", false, "don't auto-open browser")
 	flag.Parse()
 
 	addr := "localhost:" + *port
@@ -32,7 +33,9 @@ func main() {
 	router := api.NewRouter(frontend)
 
 	fmt.Printf("Socratic Slopinar running at http://%s\n", addr)
-	openBrowser("http://" + addr)
+	if !*noBrowser {
+		openBrowser("http://" + addr)
+	}
 
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatalf("server error: %v", err)

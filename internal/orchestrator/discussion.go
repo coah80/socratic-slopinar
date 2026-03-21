@@ -171,7 +171,8 @@ func chatWithRetry(ctx context.Context, client *openrouter.Client, modelID strin
 	if keep > len(rest) {
 		keep = len(rest)
 	}
-	trimmed := append([]openrouter.ChatMessage{sys}, rest[len(rest)-keep:]...)
+	kept := sanitizeMessages(rest[len(rest)-keep:])
+	trimmed := append([]openrouter.ChatMessage{sys}, kept...)
 	log.Printf("[DISC %s] [%s] retry: %d msgs (was %d), no tools", discID, displayName, len(trimmed), len(messages))
 
 	resp2, err2 := client.Chat(ctx, openrouter.ChatRequest{
@@ -439,6 +440,37 @@ func generateExecutionPrompt(
 
 const maxContextMessages = 25
 
+func sanitizeMessages(msgs []openrouter.ChatMessage) []openrouter.ChatMessage {
+	var out []openrouter.ChatMessage
+	toolCallIDs := make(map[string]bool)
+
+	for _, m := range msgs {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				toolCallIDs[tc.ID] = true
+			}
+		}
+	}
+
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			if !toolCallIDs[m.ToolCallID] {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+
+	if len(out) > 0 && out[len(out)-1].Role == "assistant" {
+		out = append(out, openrouter.ChatMessage{
+			Role:    "user",
+			Content: "[Continue the discussion]",
+		})
+	}
+
+	return out
+}
+
 func withNotesContext(messages []openrouter.ChatMessage, notes string) []openrouter.ChatMessage {
 	trimmed := messages
 	wasCompacted := false
@@ -446,7 +478,8 @@ func withNotesContext(messages []openrouter.ChatMessage, notes string) []openrou
 		trimmed = trimmed[len(trimmed)-maxContextMessages:]
 		wasCompacted = true
 	}
-	cloned := cloneMessages(trimmed)
+
+	cloned := sanitizeMessages(cloneMessages(trimmed))
 
 	if wasCompacted && strings.TrimSpace(notes) != "" {
 		catchup := openrouter.ChatMessage{

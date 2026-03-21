@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const baseURL = "https://openrouter.ai/api/v1/chat/completions"
@@ -39,7 +40,10 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 		return ChatResponse{}, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL, bytes.NewReader(body))
+	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(callCtx, "POST", baseURL, bytes.NewReader(body))
 	if err != nil {
 		return ChatResponse{}, err
 	}
