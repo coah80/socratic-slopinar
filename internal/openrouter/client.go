@@ -7,28 +7,68 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 )
 
-const baseURL = "https://openrouter.ai/api/v1/chat/completions"
-
 type Client struct {
-	apiKey     string
-	httpClient *http.Client
+	providerKeys map[string]string
+	httpClient   *http.Client
 }
 
-func NewClient(apiKey string) *Client {
+func NewClient(providerKeys map[string]string) *Client {
+	keys := make(map[string]string, len(providerKeys))
+	for k, v := range providerKeys {
+		keys[k] = v
+	}
 	return &Client{
-		apiKey:     apiKey,
-		httpClient: &http.Client{},
+		providerKeys: keys,
+		httpClient:   &http.Client{},
 	}
 }
 
+func (c *Client) resolveRequest(modelID string) (url string, resolvedModel string, provider Provider, apiKey string, err error) {
+	providerID := DetectProvider(modelID)
+	provider = GetProvider(providerID)
+
+	if providerID == "anthropic" {
+		log.Printf("[PROVIDER] Anthropic detected for %s, routing through OpenRouter (incompatible API format)", modelID)
+		providerID = "openrouter"
+		provider = GetProvider("openrouter")
+	}
+
+	apiKey, hasKey := c.providerKeys[providerID]
+	if !hasKey || apiKey == "" {
+		apiKey, hasKey = c.providerKeys["openrouter"]
+		if !hasKey || apiKey == "" {
+			return "", "", Provider{}, "", fmt.Errorf("no API key for provider %q and no OpenRouter fallback", providerID)
+		}
+		provider = GetProvider("openrouter")
+		resolvedModel = modelID
+		log.Printf("[PROVIDER] No key for %s, falling back to OpenRouter for %s", providerID, modelID)
+	} else {
+		resolvedModel = modelID
+		if provider.StripPrefix {
+			resolvedModel = stripModelPrefix(modelID)
+		}
+		if providerID != "openrouter" {
+			log.Printf("[PROVIDER] Routing %s directly to %s (model: %s)", modelID, provider.Name, resolvedModel)
+		}
+	}
+
+	return provider.BaseURL, resolvedModel, provider, apiKey, nil
+}
+
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	url, resolvedModel, provider, apiKey, err := c.resolveRequest(req.Model)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+
 	r := ChatRequest{
-		Model:      req.Model,
+		Model:      resolvedModel,
 		Messages:   req.Messages,
 		Tools:      req.Tools,
 		Stream:     false,
@@ -43,11 +83,11 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(callCtx, "POST", baseURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(callCtx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return ChatResponse{}, err
 	}
-	c.setHeaders(httpReq)
+	setProviderHeaders(httpReq, provider, apiKey)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -57,7 +97,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return ChatResponse{}, fmt.Errorf("openrouter %d: %s", resp.StatusCode, string(b))
+		return ChatResponse{}, fmt.Errorf("%s %d: %s", provider.Name, resp.StatusCode, string(b))
 	}
 
 	var result ChatResponse
@@ -68,8 +108,13 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 }
 
 func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error) {
+	url, resolvedModel, provider, apiKey, err := c.resolveRequest(req.Model)
+	if err != nil {
+		return nil, err
+	}
+
 	r := ChatRequest{
-		Model:      req.Model,
+		Model:      resolvedModel,
 		Messages:   req.Messages,
 		Tools:      req.Tools,
 		Stream:     true,
@@ -81,11 +126,11 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", baseURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	c.setHeaders(httpReq)
+	setProviderHeaders(httpReq, provider, apiKey)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -95,7 +140,7 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("openrouter %d: %s", resp.StatusCode, string(b))
+		return nil, fmt.Errorf("%s %d: %s", provider.Name, resp.StatusCode, string(b))
 	}
 
 	ch := make(chan StreamChunk, 64)
@@ -127,8 +172,8 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	return ch, nil
 }
 
-func (c *Client) setHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+func setProviderHeaders(req *http.Request, provider Provider, apiKey string) {
+	req.Header.Set(provider.AuthHeader, provider.AuthPrefix+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("HTTP-Referer", "http://localhost:8080")
 }

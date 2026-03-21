@@ -39,7 +39,49 @@ export type Config = {
 	api_key: string;
 	models: string[];
 	tavily_api_key: string;
+	provider_keys: Record<string, string>;
 };
+
+export const PROVIDERS = [
+	{ id: 'openrouter', name: 'OpenRouter', color: '#6366f1' },
+	{ id: 'openai', name: 'OpenAI', color: '#10a37f' },
+	{ id: 'anthropic', name: 'Anthropic', color: '#d4a574' },
+	{ id: 'google', name: 'Google', color: '#4285f4' },
+	{ id: 'xai', name: 'xAI', color: '#1da1f2' },
+	{ id: 'deepseek', name: 'DeepSeek', color: '#0066ff' },
+	{ id: 'mistral', name: 'Mistral', color: '#ff7000' },
+	{ id: 'groq', name: 'Groq', color: '#f55036' },
+	{ id: 'together', name: 'Together', color: '#5046e5' },
+	{ id: 'minimax', name: 'MiniMax', color: '#7c3aed' },
+] as const;
+
+export type ProviderId = typeof PROVIDERS[number]['id'];
+
+const MODEL_PREFIX_MAP: Record<string, ProviderId> = {
+	'openai/': 'openai',
+	'anthropic/': 'anthropic',
+	'google/': 'google',
+	'x-ai/': 'xai',
+	'xai/': 'xai',
+	'deepseek/': 'deepseek',
+	'mistralai/': 'mistral',
+	'mistral/': 'mistral',
+	'groq/': 'groq',
+	'together/': 'together',
+	'minimax/': 'minimax',
+};
+
+export function getProviderForModel(modelId: string): ProviderId {
+	const lower = modelId.toLowerCase();
+	for (const [prefix, provider] of Object.entries(MODEL_PREFIX_MAP)) {
+		if (lower.startsWith(prefix)) return provider;
+	}
+	return 'openrouter';
+}
+
+export function getProviderInfo(providerId: string) {
+	return PROVIDERS.find(p => p.id === providerId) ?? PROVIDERS[0];
+}
 
 export type DiscussionState = {
 	messages: Message[];

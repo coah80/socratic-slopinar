@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { getConfig, loadConfig, saveConfig, addModel, removeModel } from '$lib/stores/settings.svelte';
+	import { PROVIDERS } from '$lib/types';
+	import ProviderLogo from './ProviderLogo.svelte';
 
 	let { onclose }: { onclose: () => void } = $props();
 
-	let apiKey = $state('');
+	let providerKeys = $state<Record<string, string>>({});
 	let tavilyKey = $state('');
 	let newModelId = $state('');
-	let showKey = $state(false);
+	let visibleKeys = $state<Set<string>>(new Set());
 	let showTavilyKey = $state(false);
 	let saving = $state(false);
 
@@ -14,14 +16,34 @@
 
 	$effect(() => {
 		loadConfig().then(() => {
-			apiKey = getConfig().api_key;
-			tavilyKey = getConfig().tavily_api_key;
+			const c = getConfig();
+			providerKeys = { ...c.provider_keys };
+			tavilyKey = c.tavily_api_key;
 		});
 	});
 
+	function toggleKeyVisibility(providerId: string) {
+		const next = new Set(visibleKeys);
+		if (next.has(providerId)) {
+			next.delete(providerId);
+		} else {
+			next.add(providerId);
+		}
+		visibleKeys = next;
+	}
+
+	function updateProviderKey(providerId: string, value: string) {
+		providerKeys = { ...providerKeys, [providerId]: value };
+	}
+
 	async function handleSave() {
 		saving = true;
-		await saveConfig({ api_key: apiKey, models: config.models, tavily_api_key: tavilyKey });
+		await saveConfig({
+			api_key: providerKeys.openrouter ?? '',
+			models: config.models,
+			tavily_api_key: tavilyKey,
+			provider_keys: providerKeys,
+		});
 		saving = false;
 		onclose();
 	}
@@ -32,7 +54,7 @@
 		newModelId = '';
 	}
 
-	function handleKeydown(e: KeyboardEvent) {
+	function handleModelKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter') handleAddModel();
 	}
 
@@ -56,37 +78,55 @@
 
 		<div class="modal-body">
 			<div class="field">
-				<label for="api-key">API Key (OpenRouter)</label>
-				<div class="key-input-wrapper">
-					{#if showKey}
-						<input id="api-key" type="text" bind:value={apiKey} placeholder="sk-or-..." class="input" />
-					{:else}
-						<input id="api-key" type="password" bind:value={apiKey} placeholder="sk-or-..." class="input" />
-					{/if}
-					<button class="toggle-vis" onclick={() => showKey = !showKey} aria-label={showKey ? 'Hide' : 'Show'}>
-						{#if showKey}
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-								<line x1="1" y1="1" x2="23" y2="23"/>
-							</svg>
-						{:else}
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-								<circle cx="12" cy="12" r="3"/>
-							</svg>
-						{/if}
-					</button>
+				<!-- svelte-ignore a11y_label_has_associated_control -->
+				<label>API Providers</label>
+				<div class="providers-list">
+					{#each PROVIDERS as provider (provider.id)}
+						{@const keyValue = providerKeys[provider.id] ?? ''}
+						{@const isVisible = visibleKeys.has(provider.id)}
+						<div class="provider-row">
+							<div class="provider-info">
+								<ProviderLogo provider={provider.id} size={18} />
+								<span class="provider-name">{provider.name}</span>
+								<span class="key-indicator" class:active={keyValue.length > 0}></span>
+							</div>
+							<div class="key-input-wrapper">
+								<input
+									type={isVisible ? 'text' : 'password'}
+									value={keyValue}
+									oninput={(e) => updateProviderKey(provider.id, e.currentTarget.value)}
+									placeholder={provider.id === 'openrouter' ? 'sk-or-...' : 'sk-...'}
+									class="input"
+								/>
+								<button class="toggle-vis" onclick={() => toggleKeyVisibility(provider.id)} aria-label={isVisible ? 'Hide' : 'Show'}>
+									{#if isVisible}
+										<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+											<line x1="1" y1="1" x2="23" y2="23"/>
+										</svg>
+									{:else}
+										<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+											<circle cx="12" cy="12" r="3"/>
+										</svg>
+									{/if}
+								</button>
+							</div>
+						</div>
+					{/each}
 				</div>
 			</div>
 
 			<div class="field">
 				<label for="tavily-key">API Key (Tavily)</label>
 				<div class="key-input-wrapper">
-					{#if showTavilyKey}
-						<input id="tavily-key" type="text" bind:value={tavilyKey} placeholder="tvly-..." class="input" />
-					{:else}
-						<input id="tavily-key" type="password" bind:value={tavilyKey} placeholder="tvly-..." class="input" />
-					{/if}
+					<input
+						id="tavily-key"
+						type={showTavilyKey ? 'text' : 'password'}
+						bind:value={tavilyKey}
+						placeholder="tvly-..."
+						class="input"
+					/>
 					<button class="toggle-vis" onclick={() => showTavilyKey = !showTavilyKey} aria-label={showTavilyKey ? 'Hide' : 'Show'}>
 						{#if showTavilyKey}
 							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -128,7 +168,7 @@
 						bind:value={newModelId}
 						placeholder="anthropic/claude-sonnet-4-6"
 						class="input"
-						onkeydown={handleKeydown}
+						onkeydown={handleModelKeydown}
 					/>
 					<button class="add-btn" onclick={handleAddModel}>Add</button>
 				</div>
@@ -158,9 +198,9 @@
 	}
 
 	.modal {
-		width: 480px;
+		width: 520px;
 		max-width: 90vw;
-		max-height: 80vh;
+		max-height: 85vh;
 		display: flex;
 		flex-direction: column;
 		background: var(--ctp-base);
@@ -222,14 +262,59 @@
 		margin-bottom: 8px;
 	}
 
+	.providers-list {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.provider-row {
+		padding: 10px 14px;
+		border-radius: 12px;
+		border: 1px solid rgba(69, 71, 90, 0.4);
+		background: rgba(49, 50, 68, 0.25);
+		transition: border-color 0.15s ease;
+	}
+
+	.provider-row:focus-within {
+		border-color: rgba(69, 71, 90, 0.8);
+	}
+
+	.provider-info {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 8px;
+	}
+
+	.provider-name {
+		font-family: var(--font-data);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--ctp-subtext1);
+	}
+
+	.key-indicator {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--ctp-surface2);
+		margin-left: auto;
+		transition: background 0.15s ease;
+	}
+
+	.key-indicator.active {
+		background: var(--ctp-green);
+	}
+
 	.input {
 		width: 100%;
-		padding: 12px 16px;
+		padding: 10px 14px;
 		background: rgba(49, 50, 68, 0.4);
 		border: 1px solid var(--ctp-surface1);
-		border-radius: 12px;
+		border-radius: 10px;
 		color: var(--ctp-text);
-		font-size: 14px;
+		font-size: 13px;
 		font-family: var(--font-body);
 		transition: border-color 0.15s ease;
 		outline: none;
@@ -248,12 +333,12 @@
 	}
 
 	.key-input-wrapper .input {
-		padding-right: 42px;
+		padding-right: 40px;
 	}
 
 	.toggle-vis {
 		position: absolute;
-		right: 8px;
+		right: 6px;
 		top: 50%;
 		transform: translateY(-50%);
 		display: flex;
@@ -325,10 +410,10 @@
 	}
 
 	.add-btn {
-		padding: 12px 16px;
+		padding: 10px 16px;
 		border: 1px solid var(--ctp-surface1);
 		background: rgba(49, 50, 68, 0.4);
-		border-radius: 12px;
+		border-radius: 10px;
 		font-size: 14px;
 		font-weight: 500;
 		color: var(--ctp-subtext1);

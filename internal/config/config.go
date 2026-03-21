@@ -7,9 +7,10 @@ import (
 )
 
 type Config struct {
-	APIKey    string   `json:"api_key"`
-	Models    []string `json:"models"`
-	TavilyKey string   `json:"tavily_api_key"`
+	APIKey       string            `json:"api_key"`
+	Models       []string          `json:"models"`
+	TavilyKey    string            `json:"tavily_api_key"`
+	ProviderKeys map[string]string `json:"provider_keys,omitempty"`
 }
 
 func configDir() string {
@@ -25,7 +26,7 @@ func Load() (Config, error) {
 	data, err := os.ReadFile(configPath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Config{Models: []string{}}, nil
+			return Config{Models: []string{}, ProviderKeys: map[string]string{}}, nil
 		}
 		return Config{}, err
 	}
@@ -35,6 +36,9 @@ func Load() (Config, error) {
 	}
 	if cfg.Models == nil {
 		cfg.Models = []string{}
+	}
+	if cfg.ProviderKeys == nil {
+		cfg.ProviderKeys = map[string]string{}
 	}
 	return cfg, nil
 }
@@ -59,7 +63,12 @@ func AddModel(cfg Config, model string) Config {
 	models := make([]string, len(cfg.Models)+1)
 	copy(models, cfg.Models)
 	models[len(cfg.Models)] = model
-	return Config{APIKey: cfg.APIKey, Models: models, TavilyKey: cfg.TavilyKey}
+	return Config{
+		APIKey:       cfg.APIKey,
+		Models:       models,
+		TavilyKey:    cfg.TavilyKey,
+		ProviderKeys: cfg.ProviderKeys,
+	}
 }
 
 func RemoveModel(cfg Config, model string) Config {
@@ -69,5 +78,23 @@ func RemoveModel(cfg Config, model string) Config {
 			models = append(models, m)
 		}
 	}
-	return Config{APIKey: cfg.APIKey, Models: models, TavilyKey: cfg.TavilyKey}
+	return Config{
+		APIKey:       cfg.APIKey,
+		Models:       models,
+		TavilyKey:    cfg.TavilyKey,
+		ProviderKeys: cfg.ProviderKeys,
+	}
+}
+
+func BuildProviderKeys(cfg Config) map[string]string {
+	keys := make(map[string]string, len(cfg.ProviderKeys)+1)
+	for k, v := range cfg.ProviderKeys {
+		keys[k] = v
+	}
+	if cfg.APIKey != "" {
+		if _, exists := keys["openrouter"]; !exists {
+			keys["openrouter"] = cfg.APIKey
+		}
+	}
+	return keys
 }

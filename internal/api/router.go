@@ -24,6 +24,7 @@ func NewRouter(frontend http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/config", handleSetConfig)
 	mux.HandleFunc("POST /api/config/models", handleAddModel)
 	mux.HandleFunc("DELETE /api/config/models/{id...}", handleRemoveModel)
+	mux.HandleFunc("GET /api/providers", handleListProviders)
 	mux.HandleFunc("GET /api/discuss", handleDiscuss)
 	mux.HandleFunc("GET /api/history", handleListHistory)
 	mux.HandleFunc("GET /api/history/{id}", handleGetHistory)
@@ -43,18 +44,24 @@ func handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	maskedKeys := make(map[string]bool, len(cfg.ProviderKeys))
+	for k, v := range cfg.ProviderKeys {
+		maskedKeys[k] = v != ""
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"api_key":        cfg.APIKey,
 		"models":         cfg.Models,
 		"tavily_api_key": cfg.TavilyKey,
+		"provider_keys":  maskedKeys,
 	})
 }
 
 func handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		APIKey    *string  `json:"api_key"`
-		Models   []string `json:"models"`
-		TavilyKey *string `json:"tavily_api_key"`
+		APIKey       *string           `json:"api_key"`
+		Models       []string          `json:"models"`
+		TavilyKey    *string           `json:"tavily_api_key"`
+		ProviderKeys map[string]string `json:"provider_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -69,23 +76,42 @@ func handleSetConfig(w http.ResponseWriter, r *http.Request) {
 
 	updated := cfg
 	if body.APIKey != nil {
-		updated = config.Config{APIKey: *body.APIKey, Models: updated.Models, TavilyKey: updated.TavilyKey}
+		updated = config.Config{APIKey: *body.APIKey, Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: updated.ProviderKeys}
 	}
 	if body.Models != nil {
-		updated = config.Config{APIKey: updated.APIKey, Models: body.Models, TavilyKey: updated.TavilyKey}
+		updated = config.Config{APIKey: updated.APIKey, Models: body.Models, TavilyKey: updated.TavilyKey, ProviderKeys: updated.ProviderKeys}
 	}
 	if body.TavilyKey != nil {
-		updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: *body.TavilyKey}
+		updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: *body.TavilyKey, ProviderKeys: updated.ProviderKeys}
+	}
+	if body.ProviderKeys != nil {
+		merged := make(map[string]string, len(updated.ProviderKeys)+len(body.ProviderKeys))
+		for k, v := range updated.ProviderKeys {
+			merged[k] = v
+		}
+		for k, v := range body.ProviderKeys {
+			if v == "" {
+				delete(merged, k)
+			} else {
+				merged[k] = v
+			}
+		}
+		updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: merged}
 	}
 
 	if err := config.Save(updated); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	maskedKeys := make(map[string]bool, len(updated.ProviderKeys))
+	for k, v := range updated.ProviderKeys {
+		maskedKeys[k] = v != ""
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"api_key":        updated.APIKey,
 		"models":         updated.Models,
 		"tavily_api_key": updated.TavilyKey,
+		"provider_keys":  maskedKeys,
 	})
 }
 
@@ -137,6 +163,18 @@ func handleRemoveModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"models": updated.Models})
 }
 
+func handleListProviders(w http.ResponseWriter, r *http.Request) {
+	type providerInfo struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	providers := make([]providerInfo, 0, len(openrouter.AllProviders))
+	for _, p := range openrouter.AllProviders {
+		providers = append(providers, providerInfo{ID: p.ID, Name: p.Name})
+	}
+	writeJSON(w, http.StatusOK, providers)
+}
+
 type discussRequest struct {
 	Prompt       string `json:"prompt"`
 	CodebasePath string `json:"codebase_path"`
@@ -182,8 +220,9 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 		wsjson.Write(ctx, conn, orchestrator.Event{Type: "error", Content: "failed to load config: " + err.Error()})
 		return
 	}
-	if cfg.APIKey == "" {
-		wsjson.Write(ctx, conn, orchestrator.Event{Type: "error", Content: "API key not configured"})
+	providerKeys := config.BuildProviderKeys(cfg)
+	if len(providerKeys) == 0 {
+		wsjson.Write(ctx, conn, orchestrator.Event{Type: "error", Content: "no API keys configured"})
 		return
 	}
 	if len(cfg.Models) == 0 {
@@ -191,7 +230,7 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := openrouter.NewClient(cfg.APIKey)
+	client := openrouter.NewClient(providerKeys)
 	discCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { Message } from '$lib/types';
+	import { getProviderForModel } from '$lib/types';
+	import ProviderLogo from './ProviderLogo.svelte';
 
 	let { message, color, muted = false, onmute, onunmute }: {
 		message: Message;
@@ -10,6 +12,7 @@
 	} = $props();
 
 	const isGod = $derived(message.role === 'god');
+	const provider = $derived(getProviderForModel(message.model_id));
 
 	function formatContent(text: string): string {
 		return text
@@ -27,6 +30,9 @@
 >
 	<div class="message-header">
 		<span class="model-dot" style="background: {isGod ? 'var(--ctp-yellow)' : color};"></span>
+		{#if !isGod}
+			<span class="provider-logo"><ProviderLogo provider={provider} size={12} /></span>
+		{/if}
 		<span class="model-name" style="color: {isGod ? 'var(--ctp-yellow)' : color};">{message.display_name}</span>
 		{#if !isGod && (onmute || onunmute)}
 			{#if muted}
@@ -111,6 +117,13 @@
 		height: 8px;
 		border-radius: 50%;
 		flex-shrink: 0;
+	}
+
+	.provider-logo {
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+		opacity: 0.7;
 	}
 
 	.model-name {

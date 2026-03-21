@@ -1,6 +1,6 @@
 import type { Config } from '$lib/types';
 
-let config = $state<Config>({ api_key: '', models: [], tavily_api_key: '' });
+let config = $state<Config>({ api_key: '', models: [], tavily_api_key: '', provider_keys: {} });
 let loading = $state(false);
 let error = $state<string | null>(null);
 
@@ -23,7 +23,16 @@ export async function loadConfig(): Promise<void> {
 		const res = await fetch('/api/config');
 		if (!res.ok) throw new Error(`Failed to load config: ${res.statusText}`);
 		const data = await res.json();
-		config = { api_key: data.api_key ?? '', models: data.models ?? [], tavily_api_key: data.tavily_api_key ?? '' };
+		const providerKeys: Record<string, string> = data.provider_keys ?? {};
+		if (data.api_key && !providerKeys.openrouter) {
+			providerKeys.openrouter = data.api_key;
+		}
+		config = {
+			api_key: data.api_key ?? '',
+			models: data.models ?? [],
+			tavily_api_key: data.tavily_api_key ?? '',
+			provider_keys: providerKeys,
+		};
 	} catch (e) {
 		error = e instanceof Error ? e.message : 'Failed to load config';
 	} finally {
