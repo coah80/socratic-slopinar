@@ -1,21 +1,37 @@
 <script lang="ts">
 	import type { Message as MessageType } from '$lib/types';
-	import { getModelColor } from '$lib/types';
+	import { getModelColor, getProviderForModel } from '$lib/types';
 	import MessageComponent from './Message.svelte';
+	import ProviderLogo from './ProviderLogo.svelte';
+	import { getDisplayNames } from '$lib/stores/websocket.svelte';
 
-	let { messages, activeModel, activeDisplayName, mutedModels = new Set(), onmute, onunmute }: {
+	let { messages, activeModel, activeDisplayName, mutedModels = new Set(), streamingTokens = new Map(), streamingVersion = 0, onmute, onunmute }: {
 		messages: MessageType[];
 		activeModel: string | null;
 		activeDisplayName: string | null;
 		mutedModels?: Set<string>;
+		streamingTokens?: Map<string, string>;
+		streamingVersion?: number;
 		onmute?: (modelId: string) => void;
 		onunmute?: (modelId: string) => void;
 	} = $props();
 
+	const streamingEntries = $derived.by(() => {
+		void streamingVersion;
+		return [...streamingTokens.entries()];
+	});
+
+	function formatContent(text: string): string {
+		return text
+			.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+			.replace(/`([^`]+)`/g, '<code>$1</code>')
+			.replace(/\n/g, '<br>');
+	}
+
 	let scrollContainer: HTMLDivElement | undefined = $state();
 
 	$effect(() => {
-		if (messages.length && scrollContainer) {
+		if ((messages.length || streamingVersion) && scrollContainer) {
 			requestAnimationFrame(() => {
 				scrollContainer!.scrollTop = scrollContainer!.scrollHeight;
 			});
@@ -48,7 +64,23 @@
 		{/each}
 	{/if}
 
-	{#if activeModel}
+	{#each streamingEntries as [modelId, text] (modelId)}
+		{@const color = getModelColor(modelId)}
+		{@const name = getDisplayNames().get(modelId) ?? modelId}
+		{@const provider = getProviderForModel(modelId)}
+		<div class="message streaming-msg" style="border-left-color: {color};">
+			<div class="message-header">
+				<span class="model-dot" style="background: {color};"></span>
+				<span class="provider-logo"><ProviderLogo {provider} size={12} /></span>
+				<span class="model-name" style="color: {color};">{name}</span>
+			</div>
+			<div class="message-content">
+				{@html formatContent(text)}<span class="cursor">|</span>
+			</div>
+		</div>
+	{/each}
+
+	{#if activeModel && !streamingTokens.has(activeModel)}
 		<div class="typing" style="border-left-color: {getModelColor(activeModel)};">
 			<span class="model-dot" style="background: {getModelColor(activeModel)};"></span>
 			<span class="typing-name" style="color: {getModelColor(activeModel)};">{activeDisplayName ?? activeModel}</span>
@@ -152,5 +184,67 @@
 	@keyframes bounce {
 		0%, 80%, 100% { transform: scale(0); }
 		40% { transform: scale(1); }
+	}
+
+	.message {
+		padding: 14px 18px;
+		border-radius: 16px;
+		border: 1px solid rgba(69, 71, 90, 0.5);
+		background: rgba(49, 50, 68, 0.4);
+		border-left: 3px solid;
+		margin-bottom: 8px;
+	}
+
+	.streaming-msg {
+		animation: fade-up 0.3s ease both;
+	}
+
+	.message-header {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-bottom: 8px;
+	}
+
+	.provider-logo {
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+		opacity: 0.7;
+	}
+
+	.model-name {
+		font-family: var(--font-data);
+		font-size: 13px;
+		font-weight: 600;
+	}
+
+	.message-content {
+		font-size: 14px;
+		line-height: 1.65;
+		color: var(--ctp-subtext1);
+	}
+
+	.message-content :global(strong) {
+		color: var(--ctp-text);
+		font-weight: 600;
+	}
+
+	.message-content :global(code) {
+		background: var(--ctp-surface0);
+		padding: 2px 6px;
+		border-radius: 4px;
+		font-family: var(--font-data);
+		font-size: 0.9em;
+	}
+
+	.cursor {
+		animation: blink 0.8s step-end infinite;
+		color: var(--ctp-mauve);
+		font-weight: 300;
+	}
+
+	@keyframes blink {
+		50% { opacity: 0; }
 	}
 </style>

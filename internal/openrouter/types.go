@@ -47,10 +47,17 @@ type StreamChoice struct {
 	FinishReason *string     `json:"finish_reason"`
 }
 
+type StreamToolCall struct {
+	Index    int          `json:"index"`
+	ID       string       `json:"id,omitempty"`
+	Type     string       `json:"type,omitempty"`
+	Function FunctionCall `json:"function"`
+}
+
 type StreamDelta struct {
-	Role      string     `json:"role,omitempty"`
-	Content   string     `json:"content,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	Role      string           `json:"role,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	ToolCalls []StreamToolCall `json:"tool_calls,omitempty"`
 }
 
 type ChatResponse struct {

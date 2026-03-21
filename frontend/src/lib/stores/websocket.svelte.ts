@@ -10,15 +10,40 @@ let state = $state<DiscussionState>({
 	error: null,
 	discussionId: null,
 	pinnedMessages: [],
-	mutedModels: new Set()
+	mutedModels: new Set(),
+	streamingTokens: new Map(),
+	streamingVersion: 0
 });
 
 let ws: WebSocket | null = null;
 let messageCounter = 0;
 let displayNames = new Map<string, string>();
+let pendingTokens = new Map<string, string>();
+let tokenFlushScheduled = false;
+
+function flushTokens(): void {
+	if (pendingTokens.size === 0) return;
+	const next = new Map(state.streamingTokens);
+	for (const [modelId, text] of pendingTokens) {
+		next.set(modelId, (next.get(modelId) ?? '') + text);
+	}
+	pendingTokens.clear();
+	tokenFlushScheduled = false;
+	state = { ...state, streamingTokens: next, streamingVersion: state.streamingVersion + 1 };
+}
+
+function scheduleTokenFlush(): void {
+	if (tokenFlushScheduled) return;
+	tokenFlushScheduled = true;
+	requestAnimationFrame(flushTokens);
+}
 
 export function getDiscussion(): DiscussionState {
 	return state;
+}
+
+export function getDisplayNames(): Map<string, string> {
+	return displayNames;
 }
 
 function createMessage(modelId: string, displayName: string, content: string, toolCalls: ToolCall[] = [], role: Message['role'] = 'assistant'): Message {
@@ -52,14 +77,27 @@ function handleWSMessage(event: MessageEvent): void {
 	const content = data.content as any;
 
 	switch (data.type) {
+		case 'token': {
+			if (data.display_name) displayNames.set(data.model_id, data.display_name);
+			const tokenText = typeof content === 'string' ? content : '';
+			pendingTokens.set(data.model_id, (pendingTokens.get(data.model_id) ?? '') + tokenText);
+			scheduleTokenFlush();
+			break;
+		}
+
 		case 'message': {
 			if (data.display_name) displayNames.set(data.model_id, data.display_name);
 			const msg = createMessage(data.model_id, data.display_name ?? data.model_id, typeof content === 'string' ? content : '');
+			const cleared = new Map(state.streamingTokens);
+			cleared.delete(data.model_id);
+			pendingTokens.delete(data.model_id);
 			state = {
 				...state,
 				messages: [...state.messages, msg],
 				activeModel: data.model_id,
-				activeDisplayName: data.display_name ?? data.model_id
+				activeDisplayName: data.display_name ?? data.model_id,
+				streamingTokens: cleared,
+				streamingVersion: state.streamingVersion + 1
 			};
 			break;
 		}
@@ -184,7 +222,9 @@ export function loadViewState(discussion: { messages: Message[]; sharedNotes: st
 		error: null,
 		discussionId: discussion.id,
 		pinnedMessages: [],
-		mutedModels: new Set()
+		mutedModels: new Set(),
+		streamingTokens: new Map(),
+		streamingVersion: 0
 	};
 }
 
@@ -192,6 +232,8 @@ export function startDiscussion(prompt: string, codebasePath: string, rounds: nu
 	stopDiscussion();
 
 	messageCounter = 0;
+	pendingTokens.clear();
+	tokenFlushScheduled = false;
 	state = {
 		messages: [],
 		sharedNotes: '',
@@ -202,7 +244,9 @@ export function startDiscussion(prompt: string, codebasePath: string, rounds: nu
 		error: null,
 		discussionId: null,
 		pinnedMessages: [],
-		mutedModels: new Set()
+		mutedModels: new Set(),
+		streamingTokens: new Map(),
+		streamingVersion: 0
 	};
 
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

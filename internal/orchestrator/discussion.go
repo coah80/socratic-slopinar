@@ -173,6 +173,9 @@ func systemPrompt(prompt, codebasePath string, thisModel string, allModels []str
 			"SHARED NOTES:\n"+
 			"The group has a shared markdown doc. Use update_notes to record plans and decisions.\n"+
 			"Markdown formatting is fine IN THE NOTES (that's a doc, not chat).\n"+
+			"Write notes as a TEAM document - NO model names or attribution. Write like one person.\n"+
+			"BAD: '- DeepSeek: use batch requests' GOOD: '- Use batch requests for better perf'\n"+
+			"The notes should read like a clean spec/plan doc, not a chat log.\n"+
 			"If your context gets compacted, the notes have everything discussed so far.\n\n"+
 			"RULES:\n"+
 			"- You are %s. Don't confuse yourself with anyone else.\n"+
@@ -195,9 +198,65 @@ func systemPrompt(prompt, codebasePath string, thisModel string, allModels []str
 
 const maxToolCallsPerTurn = 5
 
-type modelResult struct {
+func streamModelResponse(
+	ctx context.Context,
+	client *openrouter.Client,
+	modelID string,
+	messages []openrouter.ChatMessage,
+	tools []openrouter.ToolDefinition,
+	broadcast func(Event),
+	nameMap map[string]string,
+) (openrouter.ChatMessage, error) {
+	ch, err := client.StreamChat(ctx, openrouter.ChatRequest{
+		Model:    modelID,
+		Messages: messages,
+		Tools:    tools,
+	})
+	if err != nil {
+		return openrouter.ChatMessage{}, err
+	}
+
+	var content strings.Builder
+	var toolCalls []openrouter.ToolCall
+
+	for chunk := range ch {
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+
+		if delta.Content != "" {
+			content.WriteString(delta.Content)
+			broadcast(Event{Type: "token", ModelID: modelID, Content: delta.Content})
+		}
+
+		for _, stc := range delta.ToolCalls {
+			for stc.Index >= len(toolCalls) {
+				toolCalls = append(toolCalls, openrouter.ToolCall{Type: "function"})
+			}
+			tc := &toolCalls[stc.Index]
+			if stc.ID != "" {
+				tc.ID = stc.ID
+			}
+			if stc.Function.Name != "" {
+				tc.Function.Name += stc.Function.Name
+			}
+			if stc.Function.Arguments != "" {
+				tc.Function.Arguments += stc.Function.Arguments
+			}
+		}
+	}
+
+	return openrouter.ChatMessage{
+		Role:      "assistant",
+		Content:   content.String(),
+		ToolCalls: toolCalls,
+	}, nil
+}
+
+type streamResult struct {
 	modelID string
-	resp    openrouter.ChatResponse
+	msg     openrouter.ChatMessage
 	err     error
 }
 
@@ -223,7 +282,7 @@ func parallelRound(
 		broadcast(Event{Type: "status", ModelID: m, Content: "thinking..."})
 	}
 
-	results := make(chan modelResult, len(activeModels))
+	results := make(chan streamResult, len(activeModels))
 	for _, modelID := range activeModels {
 		go func(mid string) {
 			sysmsg := openrouter.ChatMessage{
@@ -231,8 +290,22 @@ func parallelRound(
 				Content: systemPrompt(disc.Prompt, disc.CodebasePath, mid, disc.Models, nameMap),
 			}
 			msgs := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
-			resp, err := chatWithRetry(ctx, client, mid, msgs, toolDefs, nameMap[mid], disc.ID)
-			results <- modelResult{modelID: mid, resp: resp, err: err}
+			msg, err := streamModelResponse(ctx, client, mid, msgs, toolDefs, broadcast, nameMap)
+			if err != nil {
+				log.Printf("[DISC %s] [%s] stream failed, falling back: %s", disc.ID, nameMap[mid], err.Error())
+				resp, retryErr := chatWithRetry(ctx, client, mid, msgs, toolDefs, nameMap[mid], disc.ID)
+				if retryErr != nil {
+					results <- streamResult{modelID: mid, err: retryErr}
+					return
+				}
+				if len(resp.Choices) == 0 {
+					results <- streamResult{modelID: mid, err: fmt.Errorf("no response")}
+					return
+				}
+				results <- streamResult{modelID: mid, msg: resp.Choices[0].Message}
+				return
+			}
+			results <- streamResult{modelID: mid, msg: msg}
 		}(modelID)
 	}
 
@@ -245,13 +318,8 @@ func parallelRound(
 			broadcast(Event{Type: "error", ModelID: r.modelID, Content: r.err.Error()})
 			continue
 		}
-		if len(r.resp.Choices) == 0 {
-			broadcast(Event{Type: "error", ModelID: r.modelID, Content: "no response"})
-			continue
-		}
-		msg := r.resp.Choices[0].Message
-		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[r.modelID], len(msg.Content), len(msg.ToolCalls))
-		updatedMessages, updatedNotes = handleModelResponse(ctx, client, r.modelID, msg, updatedMessages, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
+		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[r.modelID], len(r.msg.Content), len(r.msg.ToolCalls))
+		updatedMessages, updatedNotes = handleModelResponse(ctx, client, r.modelID, r.msg, updatedMessages, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
 	}
 	return updatedMessages, updatedNotes
 }
@@ -285,18 +353,22 @@ func sequentialRound(
 		}
 		currentMessages := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
 
-		resp, err := chatWithRetry(ctx, client, modelID, currentMessages, toolDefs, nameMap[modelID], disc.ID)
+		msg, err := streamModelResponse(ctx, client, modelID, currentMessages, toolDefs, broadcast, nameMap)
 		if err != nil {
-			log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[modelID], err.Error())
-			broadcast(Event{Type: "error", ModelID: modelID, Content: err.Error()})
-			continue
-		}
-		if len(resp.Choices) == 0 {
-			broadcast(Event{Type: "error", ModelID: modelID, Content: "no response"})
-			continue
+			log.Printf("[DISC %s] [%s] stream failed, falling back: %s", disc.ID, nameMap[modelID], err.Error())
+			resp, retryErr := chatWithRetry(ctx, client, modelID, currentMessages, toolDefs, nameMap[modelID], disc.ID)
+			if retryErr != nil {
+				log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[modelID], retryErr.Error())
+				broadcast(Event{Type: "error", ModelID: modelID, Content: retryErr.Error()})
+				continue
+			}
+			if len(resp.Choices) == 0 {
+				broadcast(Event{Type: "error", ModelID: modelID, Content: "no response"})
+				continue
+			}
+			msg = resp.Choices[0].Message
 		}
 
-		msg := resp.Choices[0].Message
 		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[modelID], len(msg.Content), len(msg.ToolCalls))
 		messages, notes = handleModelResponse(ctx, client, modelID, msg, messages, notes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
 	}

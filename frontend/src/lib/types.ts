@@ -23,7 +23,7 @@ export type PinnedMessage = {
 };
 
 export type WSMessage = {
-	type: 'message' | 'tool_call' | 'tool_result' | 'notes_update' | 'execution_prompt' | 'status' | 'error' | 'pin';
+	type: 'message' | 'tool_call' | 'tool_result' | 'notes_update' | 'execution_prompt' | 'status' | 'error' | 'pin' | 'token';
 	model_id: string;
 	display_name?: string;
 	content: unknown;
@@ -115,6 +115,8 @@ export type DiscussionState = {
 	discussionId: string | null;
 	pinnedMessages: PinnedMessage[];
 	mutedModels: Set<string>;
+	streamingTokens: Map<string, string>;
+	streamingVersion: number;
 };
 
 export type HistoryItem = {

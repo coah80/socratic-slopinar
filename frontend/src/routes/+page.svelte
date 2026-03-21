@@ -56,6 +56,8 @@
 			activeModel={discussion.activeModel}
 			activeDisplayName={discussion.activeDisplayName}
 			mutedModels={discussion.mutedModels}
+			streamingTokens={discussion.streamingTokens}
+			streamingVersion={discussion.streamingVersion}
 			onmute={muteModel}
 			onunmute={unmuteModel}
 		/>

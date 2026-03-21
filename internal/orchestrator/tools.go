@@ -57,13 +57,19 @@ func ExecuteTool(name string, codebasePath string, argsJSON string, notes *strin
 }
 
 func validatePath(codebasePath, requestedPath string) (string, error) {
-	abs, err := filepath.Abs(filepath.Join(codebasePath, requestedPath))
-	if err != nil {
-		return "", fmt.Errorf("invalid path")
-	}
 	cbAbs, err := filepath.Abs(codebasePath)
 	if err != nil {
 		return "", fmt.Errorf("invalid codebase path")
+	}
+	if strings.HasPrefix(requestedPath, cbAbs) {
+		requestedPath = strings.TrimPrefix(requestedPath, cbAbs)
+		requestedPath = strings.TrimPrefix(requestedPath, "/")
+	} else if filepath.IsAbs(requestedPath) {
+		requestedPath = strings.TrimPrefix(requestedPath, "/")
+	}
+	abs, err := filepath.Abs(filepath.Join(codebasePath, requestedPath))
+	if err != nil {
+		return "", fmt.Errorf("invalid path")
 	}
 	if !strings.HasPrefix(abs, cbAbs) {
 		return "", fmt.Errorf("path escapes codebase root")
@@ -249,18 +255,22 @@ func (UpdateNotesTool) Definition() openrouter.ToolDefinition {
 		Type: "function",
 		Function: openrouter.FunctionDef{
 			Name:        "update_notes",
-			Description: "Update the shared notes document. Use this to record plans, findings, and decisions.",
+			Description: "Update the shared team notes document. This is a collaborative doc - write as a team, NOT with model names. Write clean markdown like a spec/plan doc. Actions: 'append' adds to end, 'replace_all' replaces entire doc, 'replace_section' finds a section by heading and replaces it, 'remove_section' removes a section by heading.",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"action": map[string]interface{}{
 						"type":        "string",
-						"enum":        []string{"append", "replace_section", "clear"},
-						"description": "append adds to end, replace_section replaces the full notes, clear empties them",
+						"enum":        []string{"append", "replace_all", "replace_section", "remove_section"},
+						"description": "append: add to end. replace_all: rewrite entire doc. replace_section: replace content under a heading. remove_section: delete a section by heading.",
+					},
+					"heading": map[string]interface{}{
+						"type":        "string",
+						"description": "For replace_section/remove_section: the markdown heading to find (e.g. '## Database Schema'). Not needed for append/replace_all.",
 					},
 					"content": map[string]interface{}{
 						"type":        "string",
-						"description": "Content to append or replace with",
+						"description": "The content to write. For replace_section, this replaces everything under the heading. Do NOT prefix lines with model names.",
 					},
 				},
 				"required": []string{"action", "content"},
@@ -276,6 +286,7 @@ func (UpdateNotesTool) Execute(_ string, _ string) (string, error) {
 func executeUpdateNotes(argsJSON string, notes *string) (string, error) {
 	var args struct {
 		Action  string `json:"action"`
+		Heading string `json:"heading"`
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -284,15 +295,114 @@ func executeUpdateNotes(argsJSON string, notes *string) (string, error) {
 
 	switch args.Action {
 	case "append":
-		*notes = *notes + "\n" + args.Content
-	case "replace_section":
+		if strings.TrimSpace(*notes) == "" {
+			*notes = args.Content
+		} else {
+			*notes = *notes + "\n\n" + args.Content
+		}
+	case "replace_all":
 		*notes = args.Content
-	case "clear":
-		*notes = ""
+	case "replace_section":
+		if args.Heading == "" {
+			return "", fmt.Errorf("heading is required for replace_section")
+		}
+		*notes = replaceSection(*notes, args.Heading, args.Content)
+	case "remove_section":
+		if args.Heading == "" {
+			return "", fmt.Errorf("heading is required for remove_section")
+		}
+		*notes = removeSection(*notes, args.Heading)
 	default:
 		return "", fmt.Errorf("unknown action: %s", args.Action)
 	}
 	return "notes updated", nil
+}
+
+func replaceSection(doc, heading, newContent string) string {
+	lines := strings.Split(doc, "\n")
+	headingLevel := strings.Count(strings.TrimSpace(heading), "#")
+	if headingLevel == 0 {
+		heading = "## " + heading
+		headingLevel = 2
+	}
+	normalizedHeading := strings.TrimSpace(heading)
+
+	var result []string
+	found := false
+	skipping := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == normalizedHeading {
+			found = true
+			skipping = true
+			result = append(result, line)
+			result = append(result, newContent)
+			continue
+		}
+		if skipping {
+			lineLevel := 0
+			for _, c := range trimmed {
+				if c == '#' {
+					lineLevel++
+				} else {
+					break
+				}
+			}
+			if lineLevel > 0 && lineLevel <= headingLevel {
+				skipping = false
+			} else {
+				continue
+			}
+		}
+		result = append(result, line)
+	}
+
+	if !found {
+		if strings.TrimSpace(doc) == "" {
+			return normalizedHeading + "\n" + newContent
+		}
+		return doc + "\n\n" + normalizedHeading + "\n" + newContent
+	}
+	return strings.Join(result, "\n")
+}
+
+func removeSection(doc, heading string) string {
+	headingLevel := strings.Count(strings.TrimSpace(heading), "#")
+	if headingLevel == 0 {
+		heading = "## " + heading
+		headingLevel = 2
+	}
+	normalizedHeading := strings.TrimSpace(heading)
+
+	lines := strings.Split(doc, "\n")
+	var result []string
+	skipping := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == normalizedHeading {
+			skipping = true
+			continue
+		}
+		if skipping {
+			lineLevel := 0
+			for _, c := range trimmed {
+				if c == '#' {
+					lineLevel++
+				} else {
+					break
+				}
+			}
+			if lineLevel > 0 && lineLevel <= headingLevel {
+				skipping = false
+			} else {
+				continue
+			}
+		}
+		result = append(result, line)
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
 }
 
 // ------- web_search -------
