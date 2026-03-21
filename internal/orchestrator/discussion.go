@@ -749,43 +749,27 @@ func generateExecutionPrompt(
 const maxContextMessages = 25
 
 func sanitizeMessages(msgs []openrouter.ChatMessage) []openrouter.ChatMessage {
-	toolCallIDs := make(map[string]bool)
-	toolResultsByCallID := make(map[string]openrouter.ChatMessage)
-
-	for _, m := range msgs {
-		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			for _, tc := range m.ToolCalls {
-				toolCallIDs[tc.ID] = true
-			}
-		}
-		if m.Role == "tool" && m.ToolCallID != "" {
-			toolResultsByCallID[m.ToolCallID] = m
-		}
-	}
-
 	var out []openrouter.ChatMessage
 	for _, m := range msgs {
 		if m.Role == "tool" {
 			continue
 		}
-		out = append(out, m)
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
-			for _, tc := range m.ToolCalls {
-				if result, ok := toolResultsByCallID[tc.ID]; ok {
-					out = append(out, result)
-				}
+			cleaned := openrouter.ChatMessage{
+				Role:    "assistant",
+				Content: m.Content,
 			}
+			out = append(out, cleaned)
+			continue
 		}
+		out = append(out, m)
 	}
 
 	if len(out) > 0 && out[len(out)-1].Role == "assistant" {
-		lastMsg := out[len(out)-1]
-		if len(lastMsg.ToolCalls) == 0 {
-			out = append(out, openrouter.ChatMessage{
-				Role:    "user",
-				Content: "[Continue the discussion]",
-			})
-		}
+		out = append(out, openrouter.ChatMessage{
+			Role:    "user",
+			Content: "[Continue the discussion]",
+		})
 	}
 
 	return out
