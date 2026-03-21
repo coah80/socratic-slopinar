@@ -2,13 +2,24 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/coah80/socratic-slopinar/internal/config"
 	"github.com/coah80/socratic-slopinar/internal/openrouter"
 )
+
+type DiscussionResult struct {
+	Messages       []openrouter.ChatMessage
+	Notes          string
+	ExecutionPrompt string
+	PinnedMessages []string
+	NameMap        map[string]string
+}
 
 var tagPattern = regexp.MustCompile(`\[[\w\-./]+\]:\s*`)
 var toolCallPattern = regexp.MustCompile(`(?s)<[｜|]?(?:tool_call|function_calls?|invoke|parameter|DSML|minimax)[｜|]?[\s>].*$`)
@@ -197,14 +208,21 @@ func parallelRound(
 	toolDefs []openrouter.ToolDefinition,
 	nameMap map[string]string,
 	broadcast func(Event),
+	mutes *MuteSet,
+	pins *PinSet,
 ) ([]openrouter.ChatMessage, string) {
-	log.Printf("[DISC %s] Firing all models in parallel", disc.ID)
-	for _, m := range disc.Models {
+	activeModels := mutes.ActiveModels(disc.Models)
+	if len(activeModels) == 0 {
+		return messages, notes
+	}
+
+	log.Printf("[DISC %s] Firing %d models in parallel", disc.ID, len(activeModels))
+	for _, m := range activeModels {
 		broadcast(Event{Type: "status", ModelID: m, Content: "thinking..."})
 	}
 
-	results := make(chan modelResult, len(disc.Models))
-	for _, modelID := range disc.Models {
+	results := make(chan modelResult, len(activeModels))
+	for _, modelID := range activeModels {
 		go func(mid string) {
 			sysmsg := openrouter.ChatMessage{
 				Role:    "system",
@@ -218,7 +236,7 @@ func parallelRound(
 
 	updatedMessages := cloneMessages(messages)
 	updatedNotes := notes
-	for i := 0; i < len(disc.Models); i++ {
+	for i := 0; i < len(activeModels); i++ {
 		r := <-results
 		if r.err != nil {
 			log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[r.modelID], r.err.Error())
@@ -231,7 +249,7 @@ func parallelRound(
 		}
 		msg := r.resp.Choices[0].Message
 		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[r.modelID], len(msg.Content), len(msg.ToolCalls))
-		updatedMessages, updatedNotes = handleModelResponse(ctx, client, r.modelID, msg, updatedMessages, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0)
+		updatedMessages, updatedNotes = handleModelResponse(ctx, client, r.modelID, msg, updatedMessages, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
 	}
 	return updatedMessages, updatedNotes
 }
@@ -245,10 +263,15 @@ func sequentialRound(
 	toolDefs []openrouter.ToolDefinition,
 	nameMap map[string]string,
 	broadcast func(Event),
+	mutes *MuteSet,
+	pins *PinSet,
 ) ([]openrouter.ChatMessage, string) {
 	for _, modelID := range disc.Models {
 		if ctx.Err() != nil {
 			return messages, notes
+		}
+		if mutes.IsMuted(modelID) {
+			continue
 		}
 
 		log.Printf("[DISC %s] [%s] requesting (%d msgs)", disc.ID, nameMap[modelID], len(messages))
@@ -273,7 +296,7 @@ func sequentialRound(
 
 		msg := resp.Choices[0].Message
 		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[modelID], len(msg.Content), len(msg.ToolCalls))
-		messages, notes = handleModelResponse(ctx, client, modelID, msg, messages, notes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0)
+		messages, notes = handleModelResponse(ctx, client, modelID, msg, messages, notes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
 	}
 	return messages, notes
 }
@@ -339,7 +362,7 @@ func chatWithRetry(ctx context.Context, client *openrouter.Client, modelID strin
 	return resp2, nil
 }
 
-func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBroadcast func(Event)) {
+func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBroadcast func(Event), mutes *MuteSet, pins *PinSet, injector *Injector) DiscussionResult {
 	nameMap := buildNameMap(disc.Models)
 	broadcast := func(e Event) {
 		if e.ModelID != "" {
@@ -364,16 +387,22 @@ func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBro
 	for round := 0; round < disc.MaxRounds; round++ {
 		if ctx.Err() != nil {
 			broadcast(Event{Type: "status", Content: "stopped"})
-			return
+			return DiscussionResult{Messages: messages, Notes: notes, PinnedMessages: pins.All(), NameMap: nameMap}
+		}
+
+		injected := injector.Drain()
+		for _, msg := range injected {
+			messages = append(cloneMessages(messages), msg)
+			broadcast(Event{Type: "message", ModelID: "god", DisplayName: "God", Content: strings.TrimPrefix(msg.Content, "[God]: ")})
 		}
 
 		log.Printf("[DISC %s] === Round %d/%d ===", disc.ID, round+1, disc.MaxRounds)
 		broadcast(Event{Type: "status", Content: fmt.Sprintf("round %d/%d", round+1, disc.MaxRounds)})
 
 		if round == 0 {
-			messages, notes = parallelRound(ctx, client, disc, messages, notes, toolDefs, nameMap, broadcast)
+			messages, notes = parallelRound(ctx, client, disc, messages, notes, toolDefs, nameMap, broadcast, mutes, pins)
 		} else {
-			messages, notes = sequentialRound(ctx, client, disc, messages, notes, toolDefs, nameMap, broadcast)
+			messages, notes = sequentialRound(ctx, client, disc, messages, notes, toolDefs, nameMap, broadcast, mutes, pins)
 		}
 
 		agreementCount = countAgreements(messages, 6)
@@ -389,6 +418,55 @@ func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBro
 	broadcast(Event{Type: "execution_prompt", Content: execPrompt})
 	broadcast(Event{Type: "status", Content: "done"})
 	log.Printf("[DISC %s] Done", disc.ID)
+
+	return DiscussionResult{
+		Messages:        messages,
+		Notes:           notes,
+		ExecutionPrompt: execPrompt,
+		PinnedMessages:  pins.All(),
+		NameMap:         nameMap,
+	}
+}
+
+func BuildRecord(disc Discussion, result DiscussionResult) config.DiscussionRecord {
+	records := make([]config.MessageRecord, 0, len(result.Messages))
+	for _, m := range result.Messages {
+		if m.Role != "assistant" {
+			continue
+		}
+		modelID := ""
+		displayName := ""
+		for id, name := range result.NameMap {
+			prefix := "[" + name + "]: "
+			if strings.HasPrefix(m.Content, prefix) {
+				modelID = id
+				displayName = name
+				break
+			}
+		}
+		content := m.Content
+		for _, name := range result.NameMap {
+			prefix := "[" + name + "]: "
+			content = strings.TrimPrefix(content, prefix)
+		}
+		records = append(records, config.MessageRecord{
+			ModelID:     modelID,
+			DisplayName: displayName,
+			Content:     content,
+			Timestamp:   time.Now().Unix(),
+		})
+	}
+	return config.DiscussionRecord{
+		ID:              disc.ID,
+		Prompt:          disc.Prompt,
+		CodebasePath:    disc.CodebasePath,
+		Models:          disc.Models,
+		Messages:        records,
+		SharedNotes:     result.Notes,
+		ExecutionPrompt: result.ExecutionPrompt,
+		PinnedMessages:  result.PinnedMessages,
+		CreatedAt:       time.Now().Unix(),
+	}
 }
 
 func handleModelResponse(
@@ -403,6 +481,7 @@ func handleModelResponse(
 	broadcast func(Event),
 	nameMap map[string]string,
 	totalToolCalls int,
+	pins *PinSet,
 ) ([]openrouter.ChatMessage, string) {
 
 	cleanContent := stripTags(msg.Content)
@@ -437,7 +516,7 @@ func handleModelResponse(
 			Content: map[string]string{"name": tc.Function.Name, "arguments": tc.Function.Arguments},
 		})
 
-		result, err := ExecuteTool(tc.Function.Name, codebasePath, tc.Function.Arguments, &updatedNotes)
+		result, err := ExecuteTool(tc.Function.Name, codebasePath, tc.Function.Arguments, &updatedNotes, pins)
 		if err != nil {
 			log.Printf("[TOOL] [%s] error: %s", nameMap[modelID], err.Error())
 			result = "error: " + err.Error()
@@ -447,6 +526,13 @@ func handleModelResponse(
 
 		if tc.Function.Name == "update_notes" {
 			broadcast(Event{Type: "notes_update", ModelID: modelID, Content: updatedNotes})
+		}
+		if tc.Function.Name == "pin_message" && err == nil {
+			var pinArgs struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal([]byte(tc.Function.Arguments), &pinArgs)
+			broadcast(Event{Type: "pin", ModelID: modelID, Content: pinArgs.Message})
 		}
 
 		displayResult := result
@@ -483,7 +569,7 @@ func handleModelResponse(
 	if len(followup.Choices) > 0 {
 		fmsg := followup.Choices[0].Message
 		if len(fmsg.ToolCalls) > 0 {
-			return handleModelResponse(ctx, client, modelID, fmsg, updatedMessages, updatedNotes, toolDefs, codebasePath, broadcast, nameMap, newTotal)
+			return handleModelResponse(ctx, client, modelID, fmsg, updatedMessages, updatedNotes, toolDefs, codebasePath, broadcast, nameMap, newTotal, pins)
 		}
 		fClean := stripTags(fmsg.Content)
 		if fClean != "" {

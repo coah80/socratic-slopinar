@@ -1,4 +1,4 @@
-export type MessageRole = 'assistant' | 'system' | 'tool';
+export type MessageRole = 'assistant' | 'system' | 'tool' | 'god';
 
 export type ToolCall = {
 	name: string;
@@ -16,8 +16,14 @@ export type Message = {
 	timestamp: number;
 };
 
+export type PinnedMessage = {
+	model_id: string;
+	display_name: string;
+	content: string;
+};
+
 export type WSMessage = {
-	type: 'message' | 'tool_call' | 'tool_result' | 'notes_update' | 'execution_prompt' | 'status' | 'error';
+	type: 'message' | 'tool_call' | 'tool_result' | 'notes_update' | 'execution_prompt' | 'status' | 'error' | 'pin';
 	model_id: string;
 	display_name?: string;
 	content: unknown;
@@ -43,6 +49,25 @@ export type DiscussionState = {
 	activeDisplayName: string | null;
 	status: 'idle' | 'running' | 'complete' | 'error';
 	error: string | null;
+	discussionId: string | null;
+	pinnedMessages: PinnedMessage[];
+	mutedModels: Set<string>;
+};
+
+export type HistoryItem = {
+	id: string;
+	prompt: string;
+	model_count: number;
+	message_count: number;
+	date: string;
+};
+
+export type HistoryDiscussion = {
+	id: string;
+	prompt: string;
+	messages: Message[];
+	sharedNotes: string;
+	executionPrompt: string;
 };
 
 const PALETTE = [

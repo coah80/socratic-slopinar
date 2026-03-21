@@ -1,4 +1,4 @@
-import type { Message, WSMessage, DiscussionState, ToolCall } from '$lib/types';
+import type { Message, WSMessage, DiscussionState, ToolCall, PinnedMessage } from '$lib/types';
 
 let state = $state<DiscussionState>({
 	messages: [],
@@ -7,7 +7,10 @@ let state = $state<DiscussionState>({
 	activeModel: null,
 	activeDisplayName: null,
 	status: 'idle',
-	error: null
+	error: null,
+	discussionId: null,
+	pinnedMessages: [],
+	mutedModels: new Set()
 });
 
 let ws: WebSocket | null = null;
@@ -18,13 +21,13 @@ export function getDiscussion(): DiscussionState {
 	return state;
 }
 
-function createMessage(modelId: string, displayName: string, content: string, toolCalls: ToolCall[] = []): Message {
+function createMessage(modelId: string, displayName: string, content: string, toolCalls: ToolCall[] = [], role: Message['role'] = 'assistant'): Message {
 	messageCounter++;
 	return {
 		id: `msg-${messageCounter}-${Date.now()}`,
 		model_id: modelId,
 		display_name: displayName || modelId,
-		role: 'assistant',
+		role,
 		content,
 		tool_calls: toolCalls,
 		timestamp: Date.now()
@@ -107,14 +110,29 @@ function handleWSMessage(event: MessageEvent): void {
 			break;
 		}
 
+		case 'pin': {
+			const pin: PinnedMessage = {
+				model_id: data.model_id,
+				display_name: data.display_name ?? displayNames.get(data.model_id) ?? data.model_id,
+				content: typeof content === 'string' ? content : ''
+			};
+			state = {
+				...state,
+				pinnedMessages: [...state.pinnedMessages, pin]
+			};
+			break;
+		}
+
 		case 'status': {
 			if (data.display_name && data.model_id) displayNames.set(data.model_id, data.display_name);
 			const s = typeof content === 'string' ? content : '';
 			const newStatus = (s === 'done' || s === 'complete') ? 'complete' as const : s === 'running' ? 'running' as const : state.status;
 			const isThinking = s.includes('thinking');
+			const discussionId = (content as any)?.discussion_id ?? state.discussionId;
 			state = {
 				...state,
 				status: newStatus,
+				discussionId: typeof discussionId === 'string' ? discussionId : state.discussionId,
 				activeModel: newStatus === 'complete' ? null : (isThinking ? data.model_id : state.activeModel),
 				activeDisplayName: newStatus === 'complete' ? null : (isThinking ? (data.display_name ?? displayNames.get(data.model_id) ?? data.model_id) : state.activeDisplayName)
 			};
@@ -128,6 +146,48 @@ function handleWSMessage(event: MessageEvent): void {
 	}
 }
 
+export function sendAction(action: Record<string, unknown>): void {
+	if (ws && ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify(action));
+	}
+}
+
+export function muteModel(modelId: string): void {
+	const next = new Set(state.mutedModels);
+	next.add(modelId);
+	state = { ...state, mutedModels: next };
+	sendAction({ action: 'mute', model_id: modelId });
+}
+
+export function unmuteModel(modelId: string): void {
+	const next = new Set(state.mutedModels);
+	next.delete(modelId);
+	state = { ...state, mutedModels: next };
+	sendAction({ action: 'unmute', model_id: modelId });
+}
+
+export function injectMessage(content: string): void {
+	if (!content.trim()) return;
+	const msg = createMessage('god', 'God', content.trim(), [], 'god');
+	state = { ...state, messages: [...state.messages, msg] };
+	sendAction({ action: 'inject', content: content.trim() });
+}
+
+export function loadViewState(discussion: { messages: Message[]; sharedNotes: string; executionPrompt: string; id: string }): void {
+	state = {
+		messages: discussion.messages,
+		sharedNotes: discussion.sharedNotes,
+		executionPrompt: discussion.executionPrompt,
+		activeModel: null,
+		activeDisplayName: null,
+		status: 'complete',
+		error: null,
+		discussionId: discussion.id,
+		pinnedMessages: [],
+		mutedModels: new Set()
+	};
+}
+
 export function startDiscussion(prompt: string, codebasePath: string, rounds: number): void {
 	stopDiscussion();
 
@@ -137,8 +197,12 @@ export function startDiscussion(prompt: string, codebasePath: string, rounds: nu
 		sharedNotes: '',
 		executionPrompt: '',
 		activeModel: null,
+		activeDisplayName: null,
 		status: 'running',
-		error: null
+		error: null,
+		discussionId: null,
+		pinnedMessages: [],
+		mutedModels: new Set()
 	};
 
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

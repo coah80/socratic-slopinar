@@ -3,7 +3,14 @@
 	import { getModelColor } from '$lib/types';
 	import MessageComponent from './Message.svelte';
 
-	let { messages, activeModel, activeDisplayName }: { messages: MessageType[]; activeModel: string | null; activeDisplayName: string | null } = $props();
+	let { messages, activeModel, activeDisplayName, mutedModels = new Set(), onmute, onunmute }: {
+		messages: MessageType[];
+		activeModel: string | null;
+		activeDisplayName: string | null;
+		mutedModels?: Set<string>;
+		onmute?: (modelId: string) => void;
+		onunmute?: (modelId: string) => void;
+	} = $props();
 
 	let scrollContainer: HTMLDivElement | undefined = $state();
 
@@ -30,7 +37,13 @@
 	{:else}
 		{#each messages as msg, i (msg.id)}
 			<div class="msg-enter" style="animation-delay: {Math.min(i * 30, 200)}ms;">
-				<MessageComponent message={msg} color={getModelColor(msg.model_id)} />
+				<MessageComponent
+					message={msg}
+					color={getModelColor(msg.model_id)}
+					muted={mutedModels.has(msg.model_id)}
+					{onmute}
+					{onunmute}
+				/>
 			</div>
 		{/each}
 	{/if}

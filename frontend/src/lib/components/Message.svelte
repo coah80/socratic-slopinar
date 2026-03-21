@@ -1,7 +1,15 @@
 <script lang="ts">
 	import type { Message } from '$lib/types';
 
-	let { message, color }: { message: Message; color: string } = $props();
+	let { message, color, muted = false, onmute, onunmute }: {
+		message: Message;
+		color: string;
+		muted?: boolean;
+		onmute?: (modelId: string) => void;
+		onunmute?: (modelId: string) => void;
+	} = $props();
+
+	const isGod = $derived(message.role === 'god');
 
 	function formatContent(text: string): string {
 		return text
@@ -9,14 +17,35 @@
 			.replace(/`([^`]+)`/g, '<code>$1</code>')
 			.replace(/\n/g, '<br>');
 	}
-
-
 </script>
 
-<div class="message" style="border-left-color: {color};">
+<div
+	class="message"
+	class:muted
+	class:god-message={isGod}
+	style="border-left-color: {isGod ? 'var(--ctp-yellow)' : color};"
+>
 	<div class="message-header">
-		<span class="model-dot" style="background: {color};"></span>
-		<span class="model-name" style="color: {color};">{message.display_name}</span>
+		<span class="model-dot" style="background: {isGod ? 'var(--ctp-yellow)' : color};"></span>
+		<span class="model-name" style="color: {isGod ? 'var(--ctp-yellow)' : color};">{message.display_name}</span>
+		{#if !isGod && (onmute || onunmute)}
+			{#if muted}
+				<button class="mute-btn" onclick={() => onunmute?.(message.model_id)} aria-label="Unmute {message.display_name}">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+						<line x1="23" y1="9" x2="17" y2="15"/>
+						<line x1="17" y1="9" x2="23" y2="15"/>
+					</svg>
+				</button>
+			{:else}
+				<button class="mute-btn" onclick={() => onmute?.(message.model_id)} aria-label="Mute {message.display_name}">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+						<path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+					</svg>
+				</button>
+			{/if}
+		{/if}
 	</div>
 
 	{#if message.content}
@@ -61,6 +90,15 @@
 		margin-bottom: 8px;
 	}
 
+	.message.muted {
+		opacity: 0.4;
+	}
+
+	.message.god-message {
+		background: rgba(249, 226, 175, 0.06);
+		border-color: rgba(249, 226, 175, 0.25);
+	}
+
 	.message-header {
 		display: flex;
 		align-items: center;
@@ -79,6 +117,23 @@
 		font-family: var(--font-data);
 		font-size: 13px;
 		font-weight: 600;
+	}
+
+	.mute-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 24px;
+		height: 24px;
+		border-radius: 6px;
+		color: var(--ctp-overlay0);
+		margin-left: auto;
+		transition: all 0.15s ease;
+	}
+
+	.mute-btn:hover {
+		background: rgba(49, 50, 68, 0.6);
+		color: var(--ctp-text);
 	}
 
 	.message-content {

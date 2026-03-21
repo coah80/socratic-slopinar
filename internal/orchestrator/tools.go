@@ -28,6 +28,7 @@ func AllTools() []Tool {
 		SearchCodeTool{},
 		UpdateNotesTool{},
 		WebSearchTool{},
+		PinMessageTool{},
 	}
 }
 
@@ -40,11 +41,14 @@ func AllToolDefinitions() []openrouter.ToolDefinition {
 	return defs
 }
 
-func ExecuteTool(name string, codebasePath string, argsJSON string, notes *string) (string, error) {
+func ExecuteTool(name string, codebasePath string, argsJSON string, notes *string, pins *PinSet) (string, error) {
 	for _, t := range AllTools() {
 		if t.Name() == name {
 			if name == "update_notes" {
 				return executeUpdateNotes(argsJSON, notes)
+			}
+			if name == "pin_message" {
+				return executePinMessage(argsJSON, pins)
 			}
 			return t.Execute(codebasePath, argsJSON)
 		}
@@ -315,6 +319,48 @@ func (WebSearchTool) Definition() openrouter.ToolDefinition {
 			},
 		},
 	}
+}
+
+type PinMessageTool struct{}
+
+func (PinMessageTool) Name() string { return "pin_message" }
+
+func (PinMessageTool) Definition() openrouter.ToolDefinition {
+	return openrouter.ToolDefinition{
+		Type: "function",
+		Function: openrouter.FunctionDef{
+			Name:        "pin_message",
+			Description: "Pin an important message so it stays visible to all participants",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "The message to pin",
+					},
+				},
+				"required": []string{"message"},
+			},
+		},
+	}
+}
+
+func (PinMessageTool) Execute(_ string, _ string) (string, error) {
+	return "", fmt.Errorf("pin_message must be called through ExecuteTool")
+}
+
+func executePinMessage(argsJSON string, pins *PinSet) (string, error) {
+	var args struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", err
+	}
+	if args.Message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+	pins.Add(args.Message)
+	return "message pinned", nil
 }
 
 func (WebSearchTool) Execute(_ string, argsJSON string) (string, error) {

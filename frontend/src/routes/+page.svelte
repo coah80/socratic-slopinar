@@ -2,11 +2,14 @@
 	import Chat from '$lib/components/Chat.svelte';
 	import SharedDoc from '$lib/components/SharedDoc.svelte';
 	import ExecutionPrompt from '$lib/components/ExecutionPrompt.svelte';
-	import { getDiscussion, startDiscussion, stopDiscussion } from '$lib/stores/websocket.svelte';
+	import PinnedMessages from '$lib/components/PinnedMessages.svelte';
+	import { getDiscussion, startDiscussion, stopDiscussion, muteModel, unmuteModel, injectMessage } from '$lib/stores/websocket.svelte';
+	import { exportDiscussion } from '$lib/stores/history.svelte';
 
 	let prompt = $state('');
 	let codebasePath = $state('');
 	let rounds = $state(5);
+	let godInput = $state('');
 
 	const discussion = $derived(getDiscussion());
 
@@ -25,11 +28,37 @@
 			handleStart();
 		}
 	}
+
+	function handleGodKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			handleGodSend();
+		}
+	}
+
+	function handleGodSend() {
+		if (!godInput.trim()) return;
+		injectMessage(godInput.trim());
+		godInput = '';
+	}
+
+	function handleExport() {
+		if (discussion.discussionId) {
+			exportDiscussion(discussion.discussionId);
+		}
+	}
 </script>
 
 <div class="page">
 	<div class="left-panel">
-		<Chat messages={discussion.messages} activeModel={discussion.activeModel} activeDisplayName={discussion.activeDisplayName} />
+		<Chat
+			messages={discussion.messages}
+			activeModel={discussion.activeModel}
+			activeDisplayName={discussion.activeDisplayName}
+			mutedModels={discussion.mutedModels}
+			onmute={muteModel}
+			onunmute={unmuteModel}
+		/>
 
 		{#if discussion.status === 'error' && discussion.error}
 			<div class="error-bar">
@@ -39,6 +68,25 @@
 					<line x1="12" y1="16" x2="12.01" y2="16"/>
 				</svg>
 				<span>{discussion.error}</span>
+			</div>
+		{/if}
+
+		{#if discussion.status === 'running'}
+			<div class="god-bar">
+				<div class="god-input-group">
+					<svg class="god-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ctp-yellow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+					</svg>
+					<input
+						type="text"
+						bind:value={godInput}
+						placeholder="Intervene as God..."
+						onkeydown={handleGodKeydown}
+					/>
+				</div>
+				<button class="god-send-btn" onclick={handleGodSend} disabled={!godInput.trim()}>
+					Send
+				</button>
 			</div>
 		{/if}
 
@@ -96,11 +144,32 @@
 	<div class="divider"></div>
 
 	<div class="right-panel">
+		{#if discussion.pinnedMessages.length > 0}
+			<div class="right-card pinned-card">
+				<PinnedMessages pins={discussion.pinnedMessages} />
+			</div>
+		{/if}
 		<div class="right-card">
-			<SharedDoc content={discussion.sharedNotes} />
+			<div class="shared-doc-wrapper">
+				<SharedDoc content={discussion.sharedNotes} />
+			</div>
 		</div>
 		<div class="right-card">
-			<ExecutionPrompt content={discussion.executionPrompt} />
+			<div class="exec-prompt-wrapper">
+				<ExecutionPrompt content={discussion.executionPrompt} />
+				{#if discussion.status === 'complete' && discussion.discussionId}
+					<div class="export-area">
+						<button class="export-btn" onclick={handleExport}>
+							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+								<polyline points="7 10 12 15 17 10"/>
+								<line x1="12" y1="15" x2="12" y2="3"/>
+							</svg>
+							Export
+						</button>
+					</div>
+				{/if}
+			</div>
 		</div>
 	</div>
 </div>
@@ -144,6 +213,21 @@
 		background: rgba(49, 50, 68, 0.4);
 	}
 
+	.pinned-card {
+		flex: 0 0 auto;
+		max-height: 200px;
+	}
+
+	.shared-doc-wrapper {
+		height: 100%;
+	}
+
+	.exec-prompt-wrapper {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+	}
+
 	.error-bar {
 		display: flex;
 		align-items: center;
@@ -155,6 +239,76 @@
 		border-radius: 12px;
 		color: var(--ctp-red);
 		font-size: 13px;
+	}
+
+	.god-bar {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		padding: 10px 16px;
+		margin: 0 0 8px;
+		border-radius: 16px;
+		border: 1px solid rgba(249, 226, 175, 0.25);
+		background: rgba(249, 226, 175, 0.06);
+	}
+
+	.god-input-group {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		border-radius: 12px;
+		border: 1px solid rgba(249, 226, 175, 0.2);
+		background: rgba(49, 50, 68, 0.4);
+		padding: 0 14px;
+	}
+
+	.god-input-group:focus-within {
+		border-color: rgba(249, 226, 175, 0.5);
+	}
+
+	.god-input-group input {
+		flex: 1;
+		padding: 10px 0;
+		background: transparent;
+		font-size: 14px;
+		font-family: var(--font-body);
+		color: var(--ctp-text);
+		min-width: 0;
+	}
+
+	.god-input-group input::placeholder {
+		color: var(--ctp-overlay1);
+	}
+
+	.god-icon {
+		flex-shrink: 0;
+	}
+
+	.god-send-btn {
+		padding: 10px 20px;
+		background: var(--ctp-yellow);
+		border-radius: 12px;
+		font-size: 14px;
+		font-weight: 700;
+		color: var(--ctp-crust);
+		white-space: nowrap;
+		transition: filter 0.15s ease;
+		flex-shrink: 0;
+		font-family: var(--font-body);
+	}
+
+	.god-send-btn:hover:not(:disabled) {
+		filter: brightness(1.1);
+	}
+
+	.god-send-btn:active:not(:disabled) {
+		filter: brightness(0.9);
+	}
+
+	.god-send-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 
 	.input-bar {
@@ -294,5 +448,33 @@
 
 	.stop-btn:active {
 		filter: brightness(0.9);
+	}
+
+	.export-area {
+		padding: 12px 16px;
+		border-top: 1px solid var(--ctp-surface0);
+		flex-shrink: 0;
+	}
+
+	.export-btn {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 8px 16px;
+		border-radius: 12px;
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--ctp-subtext0);
+		border: 1px solid var(--ctp-surface1);
+		background: rgba(49, 50, 68, 0.4);
+		transition: all 0.15s ease;
+		width: 100%;
+		justify-content: center;
+		font-family: var(--font-body);
+	}
+
+	.export-btn:hover {
+		background: var(--ctp-surface1);
+		color: var(--ctp-text);
 	}
 </style>

@@ -25,6 +25,10 @@ func NewRouter(frontend http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/config/models", handleAddModel)
 	mux.HandleFunc("DELETE /api/config/models/{id...}", handleRemoveModel)
 	mux.HandleFunc("GET /api/discuss", handleDiscuss)
+	mux.HandleFunc("GET /api/history", handleListHistory)
+	mux.HandleFunc("GET /api/history/{id}", handleGetHistory)
+	mux.HandleFunc("DELETE /api/history/{id}", handleDeleteHistory)
+	mux.HandleFunc("GET /api/export/{id}", handleExport)
 
 	if frontend != nil {
 		mux.Handle("/", frontend)
@@ -140,7 +144,9 @@ type discussRequest struct {
 }
 
 type clientMessage struct {
-	Action string `json:"action"`
+	Action  string `json:"action"`
+	ModelID string `json:"model_id,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 func handleDiscuss(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +195,10 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 	discCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	mutes := orchestrator.NewMuteSet()
+	pins := orchestrator.NewPinSet()
+	injector := orchestrator.NewInjector()
+
 	var writeMu sync.Mutex
 	broadcast := func(event orchestrator.Event) {
 		writeMu.Lock()
@@ -224,20 +234,71 @@ func handleDiscuss(w http.ResponseWriter, r *http.Request) {
 				cancel()
 				return
 			}
-			if msg.Action == "stop" {
+			switch msg.Action {
+			case "stop":
 				log.Printf("[WS] client requested stop")
 				cancel()
 				return
+			case "mute":
+				log.Printf("[WS] muting model: %s", msg.ModelID)
+				mutes.Mute(msg.ModelID)
+			case "unmute":
+				log.Printf("[WS] unmuting model: %s", msg.ModelID)
+				mutes.Unmute(msg.ModelID)
+			case "inject":
+				log.Printf("[WS] god injection: %s", msg.Content)
+				injector.Send(msg.Content)
 			}
 		}
 	}()
 
 	discID := fmt.Sprintf("disc_%d", time.Now().UnixMilli())
 	disc := orchestrator.NewDiscussion(discID, req.Prompt, req.CodebasePath, cfg.Models, req.Rounds)
-	orchestrator.Run(discCtx, disc, client, broadcast)
+	result := orchestrator.Run(discCtx, disc, client, broadcast, mutes, pins, injector)
+
+	record := orchestrator.BuildRecord(disc, result)
+	if err := config.SaveDiscussion(record); err != nil {
+		log.Printf("[WS] failed to save discussion history: %v", err)
+	}
 
 	log.Printf("[WS] discussion complete, closing connection")
 	conn.Close(websocket.StatusNormalClosure, "discussion complete")
+}
+
+func handleListHistory(w http.ResponseWriter, r *http.Request) {
+	summaries, err := config.LoadDiscussions()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, summaries)
+}
+
+func handleGetHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "discussion id is required")
+		return
+	}
+	disc, err := config.LoadDiscussion(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, disc)
+}
+
+func handleDeleteHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "discussion id is required")
+		return
+	}
+	if err := config.DeleteDiscussion(id); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
