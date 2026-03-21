@@ -53,6 +53,16 @@ export const PROVIDERS = [
 	{ id: 'groq', name: 'Groq', color: '#f55036' },
 	{ id: 'together', name: 'Together', color: '#5046e5' },
 	{ id: 'minimax', name: 'MiniMax', color: '#7c3aed' },
+	{ id: 'cohere', name: 'Cohere', color: '#39594d' },
+	{ id: 'perplexity', name: 'Perplexity', color: '#20808d' },
+	{ id: 'fireworks', name: 'Fireworks', color: '#ff6b35' },
+	{ id: 'cerebras', name: 'Cerebras', color: '#ff4f00' },
+	{ id: 'nvidia', name: 'NVIDIA NIM', color: '#76b900' },
+	{ id: 'ai21', name: 'AI21', color: '#6c5ce7' },
+	{ id: 'sambanova', name: 'SambaNova', color: '#f97316' },
+	{ id: 'moonshot', name: 'Moonshot', color: '#1a56db' },
+	{ id: 'lambda', name: 'Lambda', color: '#e11d48' },
+	{ id: 'novita', name: 'Novita', color: '#8b5cf6' },
 ] as const;
 
 export type ProviderId = typeof PROVIDERS[number]['id'];
@@ -69,6 +79,17 @@ const MODEL_PREFIX_MAP: Record<string, ProviderId> = {
 	'groq/': 'groq',
 	'together/': 'together',
 	'minimax/': 'minimax',
+	'cohere/': 'cohere',
+	'perplexity/': 'perplexity',
+	'fireworks/': 'fireworks',
+	'cerebras/': 'cerebras',
+	'nvidia/': 'nvidia',
+	'ai21/': 'ai21',
+	'sambanova/': 'sambanova',
+	'moonshot/': 'moonshot',
+	'moonshotai/': 'moonshot',
+	'lambda/': 'lambda',
+	'novita/': 'novita',
 };
 
 export function getProviderForModel(modelId: string): ProviderId {

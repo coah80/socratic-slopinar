@@ -101,6 +101,8 @@ func shortName(modelID string) string {
 			"minimax": "MiniMax", "nemotron": "Nemotron", "llama": "Llama",
 			"mistral": "Mistral", "mixtral": "Mixtral", "phi": "Phi",
 			"command": "Command", "nova": "Nova", "codestral": "Codestral",
+			"sonar": "Sonar", "jamba": "Jamba", "kimi": "Kimi",
+			"cerebras": "Cerebras", "sambanova": "SambaNova",
 		}
 		if nice, ok := known[strings.ToLower(dashParts[0])]; ok {
 			return nice

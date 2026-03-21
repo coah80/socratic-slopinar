@@ -52,6 +52,50 @@
 	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
 		<text x="1" y="18" font-family="Arial, sans-serif" font-weight="900" font-size="13" fill={info.color}>MM</text>
 	</svg>
+{:else if provider === 'cohere'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<path d="M12 4a8 8 0 0 1 8 8c0 2.5-1.2 4.7-3 6.2L12 22l-5-3.8A8 8 0 0 1 12 4z" fill={info.color} />
+	</svg>
+{:else if provider === 'perplexity'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<path d="M12 2L4 8v8l8 6 8-6V8l-8-6z" stroke={info.color} stroke-width="2.5" fill="none" />
+		<circle cx="12" cy="12" r="3" fill={info.color} />
+	</svg>
+{:else if provider === 'fireworks'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<path d="M12 2l2 6h6l-5 4 2 6-5-4-5 4 2-6-5-4h6z" fill={info.color} />
+	</svg>
+{:else if provider === 'cerebras'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<rect x="4" y="4" width="7" height="7" rx="1" fill={info.color} />
+		<rect x="13" y="4" width="7" height="7" rx="1" fill={info.color} opacity="0.7" />
+		<rect x="4" y="13" width="7" height="7" rx="1" fill={info.color} opacity="0.7" />
+		<rect x="13" y="13" width="7" height="7" rx="1" fill={info.color} opacity="0.4" />
+	</svg>
+{:else if provider === 'nvidia'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<path d="M5 9c1-3 4-5 7-5v3c-2 0-4 1-5 3l-2-1zm7-5v3c3 0 5 2 5 5s-2 5-5 5v3c5 0 8-4 8-8s-3-8-8-8z" fill={info.color} />
+	</svg>
+{:else if provider === 'ai21'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<text x="2" y="18" font-family="Arial, sans-serif" font-weight="900" font-size="13" fill={info.color}>21</text>
+	</svg>
+{:else if provider === 'sambanova'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<text x="3" y="18" font-family="Arial, sans-serif" font-weight="900" font-size="12" fill={info.color}>SN</text>
+	</svg>
+{:else if provider === 'moonshot'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<path d="M12 2a10 10 0 0 0 0 20 7 7 0 0 1 0-20z" fill={info.color} />
+	</svg>
+{:else if provider === 'lambda'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<path d="M6 20L12 4l6 16h-3.5l-2.5-8-2.5 8H6z" fill={info.color} />
+	</svg>
+{:else if provider === 'novita'}
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+		<text x="4" y="18" font-family="Arial, sans-serif" font-weight="900" font-size="13" fill={info.color}>N</text>
+	</svg>
 {:else}
 	<svg width={size} height={size} viewBox="0 0 24 24" fill="none">
 		<circle cx="12" cy="12" r="8" stroke={info.color} stroke-width="2" />
