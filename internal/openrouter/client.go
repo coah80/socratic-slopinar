@@ -38,10 +38,6 @@ func (c *Client) resolveRequest(modelID string) (url string, resolvedModel strin
 		log.Printf("[PROVIDER] Anthropic detected for %s, routing through OpenRouter (incompatible API format)", modelID)
 		providerID = "openrouter"
 		provider = GetProvider("openrouter")
-	case "cohere":
-		log.Printf("[PROVIDER] Cohere detected for %s, routing through OpenRouter (v2 API format differences)", modelID)
-		providerID = "openrouter"
-		provider = GetProvider("openrouter")
 	}
 
 	apiKey, hasKey := c.providerKeys[providerID]
@@ -80,6 +76,12 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 		toolChoice = ""
 	}
 
+	// Mistral uses "any" instead of "required" for tool_choice
+	if provider.ID == "mistral" && toolChoice == "required" {
+		toolChoice = "any"
+		log.Printf("[PROVIDER] Mistral: mapping tool_choice 'required' to 'any'")
+	}
+
 	r := ChatRequest{
 		Model:       resolvedModel,
 		Messages:    req.Messages,
@@ -101,7 +103,12 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 		return ChatResponse{}, fmt.Errorf("marshal request: %w", err)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// xAI reasoning models can take much longer
+	callTimeout := 90 * time.Second
+	if provider.ID == "xai" {
+		callTimeout = 300 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(callCtx, "POST", url, bytes.NewReader(body))
@@ -130,6 +137,30 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 }
 
 func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamChunk, error) {
+	_, _, provider, _, err := c.resolveRequest(req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	// Providers that can't stream with tools: fall back to non-streaming Chat()
+	if provider.NoStream && len(req.Tools) > 0 {
+		log.Printf("[PROVIDER] %s cannot stream with tools, falling back to non-streaming Chat()", provider.Name)
+		resp, chatErr := c.Chat(ctx, req)
+		if chatErr != nil {
+			return nil, chatErr
+		}
+		ch := make(chan StreamChunk, 1)
+		go func() {
+			defer close(ch)
+			chunk := chatResponseToStreamChunk(resp)
+			select {
+			case ch <- chunk:
+			case <-ctx.Done():
+			}
+		}()
+		return ch, nil
+	}
+
 	url, resolvedModel, provider, apiKey, err := c.resolveRequest(req.Model)
 	if err != nil {
 		return nil, err
@@ -141,6 +172,12 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		log.Printf("[PROVIDER] %s does not support tools, stripping from stream request", provider.Name)
 		streamTools = nil
 		streamToolChoice = ""
+	}
+
+	// Mistral uses "any" instead of "required" for tool_choice
+	if provider.ID == "mistral" && streamToolChoice == "required" {
+		streamToolChoice = "any"
+		log.Printf("[PROVIDER] Mistral: mapping tool_choice 'required' to 'any'")
 	}
 
 	r := ChatRequest{
@@ -207,6 +244,33 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 	}()
 
 	return ch, nil
+}
+
+// chatResponseToStreamChunk converts a non-streaming ChatResponse into a
+// single StreamChunk so callers that expect a stream channel can consume it.
+func chatResponseToStreamChunk(resp ChatResponse) StreamChunk {
+	chunk := StreamChunk{ID: resp.ID}
+	for _, choice := range resp.Choices {
+		var streamToolCalls []StreamToolCall
+		for i, tc := range choice.Message.ToolCalls {
+			streamToolCalls = append(streamToolCalls, StreamToolCall{
+				Index:    i,
+				ID:       tc.ID,
+				Type:     tc.Type,
+				Function: tc.Function,
+			})
+		}
+		fr := choice.FinishReason
+		chunk.Choices = append(chunk.Choices, StreamChoice{
+			Delta: StreamDelta{
+				Role:      choice.Message.Role,
+				Content:   choice.Message.Content,
+				ToolCalls: streamToolCalls,
+			},
+			FinishReason: &fr,
+		})
+	}
+	return chunk
 }
 
 func setProviderHeaders(req *http.Request, provider Provider, apiKey string) {

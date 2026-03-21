@@ -61,7 +61,6 @@ export const PROVIDERS = [
 	{ id: 'ai21', name: 'AI21', color: '#6c5ce7' },
 	{ id: 'sambanova', name: 'SambaNova', color: '#f97316' },
 	{ id: 'moonshot', name: 'Moonshot', color: '#1a56db' },
-	{ id: 'lambda', name: 'Lambda', color: '#e11d48' },
 	{ id: 'novita', name: 'Novita', color: '#8b5cf6' },
 ] as const;
 
@@ -88,7 +87,6 @@ const MODEL_PREFIX_MAP: Record<string, ProviderId> = {
 	'sambanova/': 'sambanova',
 	'moonshot/': 'moonshot',
 	'moonshotai/': 'moonshot',
-	'lambda/': 'lambda',
 	'novita/': 'novita',
 };
 

@@ -11,6 +11,7 @@ type Provider struct {
 	Prefixes    []string
 	StripPrefix bool
 	NoTools     bool // provider does not support tool calling
+	NoStream    bool // provider cannot stream when tools are present
 }
 
 var AllProviders = []Provider{
@@ -87,7 +88,7 @@ var AllProviders = []Provider{
 	{
 		ID:          "minimax",
 		Name:        "MiniMax",
-		BaseURL:     "https://api.minimax.chat/v1/chat/completions",
+		BaseURL:     "https://api.minimax.io/v1/chat/completions",
 		AuthHeader:  "Authorization",
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"minimax/"},
@@ -96,7 +97,7 @@ var AllProviders = []Provider{
 	{
 		ID:          "cohere",
 		Name:        "Cohere",
-		BaseURL:     "https://api.cohere.com/v2/chat",
+		BaseURL:     "https://api.cohere.ai/compatibility/v1/chat/completions",
 		AuthHeader:  "Authorization",
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"cohere/", "command-"},
@@ -138,6 +139,7 @@ var AllProviders = []Provider{
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"nvidia/"},
 		StripPrefix: true,
+		NoStream:    true,
 	},
 	{
 		ID:          "ai21",
@@ -147,6 +149,8 @@ var AllProviders = []Provider{
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"ai21/", "jamba-"},
 		StripPrefix: true,
+		NoTools:     true,
+		NoStream:    true,
 	},
 	{
 		ID:          "sambanova",
@@ -167,18 +171,9 @@ var AllProviders = []Provider{
 		StripPrefix: true,
 	},
 	{
-		ID:          "lambda",
-		Name:        "Lambda",
-		BaseURL:     "https://api.lambdalabs.com/v1/chat/completions",
-		AuthHeader:  "Authorization",
-		AuthPrefix:  "Bearer ",
-		Prefixes:    []string{"lambda/"},
-		StripPrefix: true,
-	},
-	{
 		ID:          "novita",
 		Name:        "Novita",
-		BaseURL:     "https://api.novita.ai/v3/openai/chat/completions",
+		BaseURL:     "https://api.novita.ai/openai/chat/completions",
 		AuthHeader:  "Authorization",
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"novita/"},
