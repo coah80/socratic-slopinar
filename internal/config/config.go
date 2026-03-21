@@ -23,7 +23,7 @@ func configPath() string {
 }
 
 func Load() (Config, error) {
-	data, err := os.ReadFile(configPath())
+	data, wasEncrypted, err := readAndDecrypt(configPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Config{Models: []string{}, ProviderKeys: map[string]string{}}, nil
@@ -40,6 +40,9 @@ func Load() (Config, error) {
 	if cfg.ProviderKeys == nil {
 		cfg.ProviderKeys = map[string]string{}
 	}
+	if !wasEncrypted {
+		_ = Save(cfg)
+	}
 	return cfg, nil
 }
 
@@ -51,7 +54,7 @@ func Save(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(configPath(), data, 0o644)
+	return encryptAndWrite(configPath(), data)
 }
 
 func AddModel(cfg Config, model string) Config {

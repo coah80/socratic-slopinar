@@ -49,7 +49,7 @@ func SaveDiscussion(disc DiscussionRecord) error {
 	if err != nil {
 		return fmt.Errorf("marshal discussion: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, disc.ID+".json"), data, 0o644)
+	return encryptAndWrite(filepath.Join(dir, disc.ID+".json"), data)
 }
 
 func LoadDiscussions() ([]DiscussionSummary, error) {
@@ -67,13 +67,17 @@ func LoadDiscussions() ([]DiscussionSummary, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		data, wasEncrypted, err := readAndDecrypt(path)
 		if err != nil {
 			continue
 		}
 		var rec DiscussionRecord
 		if err := json.Unmarshal(data, &rec); err != nil {
 			continue
+		}
+		if !wasEncrypted {
+			_ = encryptAndWrite(path, data)
 		}
 		summaries = append(summaries, DiscussionSummary{
 			ID:           rec.ID,
@@ -91,7 +95,8 @@ func LoadDiscussions() ([]DiscussionSummary, error) {
 }
 
 func LoadDiscussion(id string) (DiscussionRecord, error) {
-	data, err := os.ReadFile(filepath.Join(HistoryDir(), id+".json"))
+	path := filepath.Join(HistoryDir(), id+".json")
+	data, wasEncrypted, err := readAndDecrypt(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return DiscussionRecord{}, fmt.Errorf("discussion not found: %s", id)
@@ -101,6 +106,9 @@ func LoadDiscussion(id string) (DiscussionRecord, error) {
 	var rec DiscussionRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return DiscussionRecord{}, fmt.Errorf("parse discussion: %w", err)
+	}
+	if !wasEncrypted {
+		_ = encryptAndWrite(path, data)
 	}
 	return rec, nil
 }
