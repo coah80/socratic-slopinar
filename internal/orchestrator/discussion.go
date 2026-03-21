@@ -11,12 +11,34 @@ import (
 )
 
 var tagPattern = regexp.MustCompile(`\[[\w\-./]+\]:\s*`)
-var toolCallPattern = regexp.MustCompile(`(?s)<(tool_call|function_calls?|invoke|parameter)[\s>].*$`)
+var toolCallPattern = regexp.MustCompile(`(?s)<[｜|]?(?:tool_call|function_calls?|invoke|parameter|DSML|minimax)[｜|]?[\s>].*$`)
+var markdownHeaderPattern = regexp.MustCompile(`(?m)^#{1,4}\s+.*$`)
+var emojiHeaderPattern = regexp.MustCompile(`(?m)^[🏁🎯✅❌📋🔧💡🚀]\s*\*\*.*?\*\*`)
+var progressPattern = regexp.MustCompile(`(?i)progress update|implementation summary|key evidence|quick summary`)
 
 func stripTags(s string) string {
 	cleaned := strings.TrimSpace(tagPattern.ReplaceAllString(s, ""))
 	cleaned = strings.TrimSpace(toolCallPattern.ReplaceAllString(cleaned, ""))
-	return cleaned
+	cleaned = markdownHeaderPattern.ReplaceAllStringFunc(cleaned, func(h string) string {
+		content := strings.TrimLeft(h, "# ")
+		return content
+	})
+	cleaned = emojiHeaderPattern.ReplaceAllStringFunc(cleaned, func(h string) string {
+		h = strings.TrimSpace(h)
+		if len(h) > 0 {
+			rs := []rune(h)
+			for i, r := range rs {
+				if r < 128 {
+					return strings.Trim(string(rs[i:]), "* ")
+				}
+			}
+		}
+		return h
+	})
+	cleaned = progressPattern.ReplaceAllString(cleaned, "")
+	cleaned = strings.ReplaceAll(cleaned, "I'd be happy to", "")
+	cleaned = strings.ReplaceAll(cleaned, "I'd be happy to", "")
+	return strings.TrimSpace(cleaned)
 }
 
 type Event struct {
@@ -113,42 +135,174 @@ func systemPrompt(prompt, codebasePath string, thisModel string, allModels []str
 		"YOUR NAME: %s\n\n"+
 			"You're in a dev group chat with: %s\n\n"+
 			"Topic: %s\nCodebase: %s\n\n"+
-			"This is a casual roundtable. You're all devs hashing out a plan together.\n"+
-			"Talk to the OTHER MODELS, not a human. The human is just watching.\n\n"+
-			"TONE - talk like these examples:\n"+
+			"You are a developer on a team. This is a slack channel. Talk like a real person.\n"+
+			"You're talking TO THE OTHER DEVS, not to a user or client. A human is spectating but isn't part of the convo.\n\n"+
+			"HOW TO TALK:\n"+
 			"- \"yo %s that's actually solid, what if we also...\"\n"+
 			"- \"%s nah that's overengineered, just use sqlite\"\n"+
 			"- \"ok hear me out - what about doing X instead\"\n"+
 			"- \"wait actually i just checked the code and there's already a...\"\n"+
-			"- \"disagree, the latency would be terrible\"\n\n"+
-			"NEVER say: \"I'd be happy to\", \"Great question\", \"Shall I proceed\", "+
-			"\"Let me break this down\", \"Absolutely\", \"That's a fantastic point\", "+
-			"\"Based on my exploration\", \"Here's what I found\", \"Let me provide\"\n"+
-			"NEVER use markdown headers (##) or bullet point analysis. Just talk normally.\n\n"+
+			"- \"disagree, the latency would be terrible\"\n"+
+			"- \"lmao yeah that'd break everything\"\n"+
+			"- \"honestly i think we're overcomplicating this\"\n\n"+
+			"BANNED PHRASES (using these = instant cringe):\n"+
+			"\"I'd be happy to\", \"Great question\", \"Shall I proceed\", \"Let me break this down\",\n"+
+			"\"Absolutely\", \"That's a fantastic point\", \"Based on my exploration\",\n"+
+			"\"Here's what I found\", \"Let me provide\", \"Progress Update\",\n"+
+			"\"Implementation Summary\", \"Key Evidence\", \"After analyzing\",\n"+
+			"\"Let me start by exploring\", \"I can confirm\", \"I want to understand\"\n\n"+
+			"BANNED FORMATTING:\n"+
+			"- NO markdown headers (# or ##)\n"+
+			"- NO emoji bullet headers (🏁 **thing**)\n"+
+			"- NO numbered lists with bold headers\n"+
+			"- NO \"## Summary\" or \"## Overview\" sections\n"+
+			"- Just write plain sentences like a normal person in a chat\n\n"+
 			"SHARED NOTES:\n"+
-			"The group has a shared notes document (markdown). This is your team's living doc.\n"+
-			"Use update_notes to add decisions, plans, and findings. Keep it organized.\n"+
-			"If your context gets compacted, the notes will tell you everything discussed so far.\n"+
-			"Treat the notes like a collaborative google doc - add to it, restructure it, keep it clean.\n\n"+
+			"The group has a shared markdown doc. Use update_notes to record plans and decisions.\n"+
+			"Markdown formatting is fine IN THE NOTES (that's a doc, not chat).\n"+
+			"If your context gets compacted, the notes have everything discussed so far.\n\n"+
 			"RULES:\n"+
 			"- You are %s. Don't confuse yourself with anyone else.\n"+
-			"- 2-4 sentences max. Be concise.\n"+
-			"- Use tools SPARINGLY - max 1-2 per turn. Don't explore the whole codebase.\n"+
-			"- Only read a file if you need specific info to make your point.\n"+
-			"- ACTIVELY use update_notes to record decisions and plans as you discuss.\n"+
-			"- Push back on bad ideas. Hype good ones. Be real.\n\n"+
-			"DO NOT:\n"+
-			"- Offer to implement anything. You're planning, not coding.\n"+
-			"- Ask for permission or confirmation.\n"+
-			"- Start your message with your name or anyone else's name in brackets.\n"+
-			"- Talk to the human. They're not here.\n"+
-			"- Be formal or robotic.",
+			"- 2-4 sentences max. SHORT. This is chat, not an essay.\n"+
+			"- If someone already said something, don't repeat it. Say \"agreed\" and move on.\n"+
+			"- Use tools only when you need to check something specific. 1-2 max per turn.\n"+
+			"- Use update_notes to record decisions as you go.\n"+
+			"- Disagree when something's wrong. Don't just agree with everyone.\n\n"+
+			"HARD NOs:\n"+
+			"- Don't offer to implement or write code. Planning only.\n"+
+			"- Don't ask permission. Don't ask the human anything.\n"+
+			"- Don't summarize what you're about to do. Just do it.\n"+
+			"- Don't write analysis reports. This is a chat, not a document.\n"+
+			"- Don't repeat the same point another model already made.\n"+
+			"- Don't say what model you are or announce yourself.",
 		myName, otherList, prompt, codebasePath,
 		example1, example2, myName,
 	)
 }
 
 const maxToolCallsPerTurn = 5
+
+type modelResult struct {
+	modelID string
+	resp    openrouter.ChatResponse
+	err     error
+}
+
+func parallelRound(
+	ctx context.Context,
+	client *openrouter.Client,
+	disc Discussion,
+	messages []openrouter.ChatMessage,
+	notes string,
+	toolDefs []openrouter.ToolDefinition,
+	nameMap map[string]string,
+	broadcast func(Event),
+) ([]openrouter.ChatMessage, string) {
+	log.Printf("[DISC %s] Firing all models in parallel", disc.ID)
+	for _, m := range disc.Models {
+		broadcast(Event{Type: "status", ModelID: m, Content: "thinking..."})
+	}
+
+	results := make(chan modelResult, len(disc.Models))
+	for _, modelID := range disc.Models {
+		go func(mid string) {
+			sysmsg := openrouter.ChatMessage{
+				Role:    "system",
+				Content: systemPrompt(disc.Prompt, disc.CodebasePath, mid, disc.Models, nameMap),
+			}
+			msgs := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
+			resp, err := chatWithRetry(ctx, client, mid, msgs, toolDefs, nameMap[mid], disc.ID)
+			results <- modelResult{modelID: mid, resp: resp, err: err}
+		}(modelID)
+	}
+
+	updatedMessages := cloneMessages(messages)
+	updatedNotes := notes
+	for i := 0; i < len(disc.Models); i++ {
+		r := <-results
+		if r.err != nil {
+			log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[r.modelID], r.err.Error())
+			broadcast(Event{Type: "error", ModelID: r.modelID, Content: r.err.Error()})
+			continue
+		}
+		if len(r.resp.Choices) == 0 {
+			broadcast(Event{Type: "error", ModelID: r.modelID, Content: "no response"})
+			continue
+		}
+		msg := r.resp.Choices[0].Message
+		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[r.modelID], len(msg.Content), len(msg.ToolCalls))
+		updatedMessages, updatedNotes = handleModelResponse(ctx, client, r.modelID, msg, updatedMessages, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0)
+	}
+	return updatedMessages, updatedNotes
+}
+
+func sequentialRound(
+	ctx context.Context,
+	client *openrouter.Client,
+	disc Discussion,
+	messages []openrouter.ChatMessage,
+	notes string,
+	toolDefs []openrouter.ToolDefinition,
+	nameMap map[string]string,
+	broadcast func(Event),
+) ([]openrouter.ChatMessage, string) {
+	for _, modelID := range disc.Models {
+		if ctx.Err() != nil {
+			return messages, notes
+		}
+
+		log.Printf("[DISC %s] [%s] requesting (%d msgs)", disc.ID, nameMap[modelID], len(messages))
+		broadcast(Event{Type: "status", ModelID: modelID, Content: "thinking..."})
+
+		sysmsg := openrouter.ChatMessage{
+			Role:    "system",
+			Content: systemPrompt(disc.Prompt, disc.CodebasePath, modelID, disc.Models, nameMap),
+		}
+		currentMessages := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
+
+		resp, err := chatWithRetry(ctx, client, modelID, currentMessages, toolDefs, nameMap[modelID], disc.ID)
+		if err != nil {
+			log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[modelID], err.Error())
+			broadcast(Event{Type: "error", ModelID: modelID, Content: err.Error()})
+			continue
+		}
+		if len(resp.Choices) == 0 {
+			broadcast(Event{Type: "error", ModelID: modelID, Content: "no response"})
+			continue
+		}
+
+		msg := resp.Choices[0].Message
+		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[modelID], len(msg.Content), len(msg.ToolCalls))
+		messages, notes = handleModelResponse(ctx, client, modelID, msg, messages, notes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0)
+	}
+	return messages, notes
+}
+
+func countAgreements(messages []openrouter.ChatMessage, lookback int) int {
+	agreePhrases := []string{
+		"agreed", "i agree", "sounds good", "that works", "let's go with",
+		"spot on", "solid plan", "nailed it", "makes sense", "on board",
+		"same page", "consensus", "let's do it", "ship it",
+	}
+	count := 0
+	start := len(messages) - lookback
+	if start < 0 {
+		start = 0
+	}
+	for _, m := range messages[start:] {
+		if m.Role != "assistant" {
+			continue
+		}
+		lower := strings.ToLower(m.Content)
+		for _, phrase := range agreePhrases {
+			if strings.Contains(lower, phrase) {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
 
 func chatWithRetry(ctx context.Context, client *openrouter.Client, modelID string, messages []openrouter.ChatMessage, tools []openrouter.ToolDefinition, displayName string, discID string) (openrouter.ChatResponse, error) {
 	resp, err := client.Chat(ctx, openrouter.ChatRequest{
@@ -205,6 +359,8 @@ func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBro
 	notes := disc.Notes
 	messages := append([]openrouter.ChatMessage{}, disc.Messages...)
 
+	agreementCount := 0
+
 	for round := 0; round < disc.MaxRounds; round++ {
 		if ctx.Err() != nil {
 			broadcast(Event{Type: "status", Content: "stopped"})
@@ -214,36 +370,17 @@ func Run(ctx context.Context, disc Discussion, client *openrouter.Client, rawBro
 		log.Printf("[DISC %s] === Round %d/%d ===", disc.ID, round+1, disc.MaxRounds)
 		broadcast(Event{Type: "status", Content: fmt.Sprintf("round %d/%d", round+1, disc.MaxRounds)})
 
-		for _, modelID := range disc.Models {
-			if ctx.Err() != nil {
-				broadcast(Event{Type: "status", Content: "stopped"})
-				return
-			}
+		if round == 0 {
+			messages, notes = parallelRound(ctx, client, disc, messages, notes, toolDefs, nameMap, broadcast)
+		} else {
+			messages, notes = sequentialRound(ctx, client, disc, messages, notes, toolDefs, nameMap, broadcast)
+		}
 
-			log.Printf("[DISC %s] [%s] requesting (%d msgs in ctx)", disc.ID, nameMap[modelID], len(messages))
-			broadcast(Event{Type: "status", ModelID: modelID, Content: "thinking..."})
-
-			sysmsg := openrouter.ChatMessage{
-				Role:    "system",
-				Content: systemPrompt(disc.Prompt, disc.CodebasePath, modelID, disc.Models, nameMap),
-			}
-			currentMessages := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
-
-			resp, err := chatWithRetry(ctx, client, modelID, currentMessages, toolDefs, nameMap[modelID], disc.ID)
-			if err != nil {
-				log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[modelID], err.Error())
-				broadcast(Event{Type: "error", ModelID: modelID, Content: err.Error()})
-				continue
-			}
-			if len(resp.Choices) == 0 {
-				log.Printf("[DISC %s] [%s] no response choices", disc.ID, nameMap[modelID])
-				broadcast(Event{Type: "error", ModelID: modelID, Content: "no response from model"})
-				continue
-			}
-
-			msg := resp.Choices[0].Message
-			log.Printf("[DISC %s] [%s] got: %d chars, %d tool calls", disc.ID, nameMap[modelID], len(msg.Content), len(msg.ToolCalls))
-			messages, notes = handleModelResponse(ctx, client, modelID, msg, messages, notes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0)
+		agreementCount = countAgreements(messages, 6)
+		if agreementCount >= 3 && round < disc.MaxRounds-1 {
+			log.Printf("[DISC %s] Convergence detected (%d agreements), wrapping up", disc.ID, agreementCount)
+			broadcast(Event{Type: "status", Content: "consensus reached, generating plan"})
+			break
 		}
 	}
 
