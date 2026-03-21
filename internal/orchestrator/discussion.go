@@ -289,7 +289,7 @@ func parallelRound(
 				Role:    "system",
 				Content: systemPrompt(disc.Prompt, disc.CodebasePath, mid, disc.Models, nameMap),
 			}
-			msgs := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
+			msgs := sanitizeMessages(append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...))
 			msg, err := streamModelResponse(ctx, client, mid, msgs, toolDefs, broadcast, nameMap)
 			if err != nil {
 				log.Printf("[DISC %s] [%s] stream failed, falling back: %s", disc.ID, nameMap[mid], err.Error())
@@ -309,17 +309,28 @@ func parallelRound(
 		}(modelID)
 	}
 
-	updatedMessages := cloneMessages(messages)
+	baseMessages := cloneMessages(messages)
 	updatedNotes := notes
+	var allResults []streamResult
 	for i := 0; i < len(activeModels); i++ {
-		r := <-results
+		allResults = append(allResults, <-results)
+	}
+
+	updatedMessages := cloneMessages(baseMessages)
+	for _, r := range allResults {
 		if r.err != nil {
 			log.Printf("[DISC %s] [%s] ERROR: %s", disc.ID, nameMap[r.modelID], r.err.Error())
 			broadcast(Event{Type: "error", ModelID: r.modelID, Content: r.err.Error()})
 			continue
 		}
 		log.Printf("[DISC %s] [%s] got: %d chars, %d tools", disc.ID, nameMap[r.modelID], len(r.msg.Content), len(r.msg.ToolCalls))
-		updatedMessages, updatedNotes = handleModelResponse(ctx, client, r.modelID, r.msg, updatedMessages, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
+		isolated := cloneMessages(baseMessages)
+		isolated, updatedNotes = handleModelResponse(ctx, client, r.modelID, r.msg, isolated, updatedNotes, toolDefs, disc.CodebasePath, broadcast, nameMap, 0, pins)
+		for _, m := range isolated[len(baseMessages):] {
+			if m.Role == "assistant" {
+				updatedMessages = append(updatedMessages, m)
+			}
+		}
 	}
 	return updatedMessages, updatedNotes
 }
@@ -351,7 +362,7 @@ func sequentialRound(
 			Role:    "system",
 			Content: systemPrompt(disc.Prompt, disc.CodebasePath, modelID, disc.Models, nameMap),
 		}
-		currentMessages := append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...)
+		currentMessages := sanitizeMessages(append([]openrouter.ChatMessage{sysmsg}, withNotesContext(messages, notes)...))
 
 		msg, err := streamModelResponse(ctx, client, modelID, currentMessages, toolDefs, broadcast, nameMap)
 		if err != nil {
@@ -404,7 +415,7 @@ func countAgreements(messages []openrouter.ChatMessage, lookback int) int {
 func chatWithRetry(ctx context.Context, client *openrouter.Client, modelID string, messages []openrouter.ChatMessage, tools []openrouter.ToolDefinition, displayName string, discID string) (openrouter.ChatResponse, error) {
 	resp, err := client.Chat(ctx, openrouter.ChatRequest{
 		Model:    modelID,
-		Messages: messages,
+		Messages: sanitizeMessages(messages),
 		Tools:    tools,
 	})
 	if err == nil {
@@ -632,7 +643,7 @@ func handleModelResponse(
 
 	followup, err := client.Chat(ctx, openrouter.ChatRequest{
 		Model:    modelID,
-		Messages: updatedMessages,
+		Messages: sanitizeMessages(updatedMessages),
 		Tools:    toolDefs,
 	})
 	if err != nil {
@@ -670,7 +681,7 @@ func forceTextResponse(
 	broadcast(Event{Type: "status", ModelID: modelID, Content: "wrapping up tools..."})
 	resp, err := client.Chat(ctx, openrouter.ChatRequest{
 		Model:    modelID,
-		Messages: messages,
+		Messages: sanitizeMessages(messages),
 	})
 	if err != nil {
 		broadcast(Event{Type: "error", ModelID: modelID, Content: err.Error()})
@@ -738,8 +749,8 @@ func generateExecutionPrompt(
 const maxContextMessages = 25
 
 func sanitizeMessages(msgs []openrouter.ChatMessage) []openrouter.ChatMessage {
-	var out []openrouter.ChatMessage
 	toolCallIDs := make(map[string]bool)
+	toolResultsByCallID := make(map[string]openrouter.ChatMessage)
 
 	for _, m := range msgs {
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
@@ -747,22 +758,34 @@ func sanitizeMessages(msgs []openrouter.ChatMessage) []openrouter.ChatMessage {
 				toolCallIDs[tc.ID] = true
 			}
 		}
+		if m.Role == "tool" && m.ToolCallID != "" {
+			toolResultsByCallID[m.ToolCallID] = m
+		}
 	}
 
+	var out []openrouter.ChatMessage
 	for _, m := range msgs {
-		if m.Role == "tool" && m.ToolCallID != "" {
-			if !toolCallIDs[m.ToolCallID] {
-				continue
-			}
+		if m.Role == "tool" {
+			continue
 		}
 		out = append(out, m)
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if result, ok := toolResultsByCallID[tc.ID]; ok {
+					out = append(out, result)
+				}
+			}
+		}
 	}
 
 	if len(out) > 0 && out[len(out)-1].Role == "assistant" {
-		out = append(out, openrouter.ChatMessage{
-			Role:    "user",
-			Content: "[Continue the discussion]",
-		})
+		lastMsg := out[len(out)-1]
+		if len(lastMsg.ToolCalls) == 0 {
+			out = append(out, openrouter.ChatMessage{
+				Role:    "user",
+				Content: "[Continue the discussion]",
+			})
+		}
 	}
 
 	return out
