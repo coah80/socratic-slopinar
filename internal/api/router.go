@@ -38,30 +38,58 @@ func NewRouter(frontend http.Handler) http.Handler {
 	return mux
 }
 
+func maskKey(raw string) string {
+	if len(raw) <= 8 {
+		return "***"
+	}
+	return raw[:5] + "..." + raw[len(raw)-3:]
+}
+
 func handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := config.Load()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	maskedKeys := make(map[string]bool, len(cfg.ProviderKeys))
+	maskedKeys := make(map[string]string, len(cfg.ProviderKeys))
+	keysSet := make([]string, 0, len(cfg.ProviderKeys))
 	for k, v := range cfg.ProviderKeys {
-		maskedKeys[k] = v != ""
+		if v != "" {
+			maskedKeys[k] = maskKey(v)
+			keysSet = append(keysSet, k)
+		}
+	}
+	if cfg.APIKey != "" {
+		if _, exists := maskedKeys["openrouter"]; !exists {
+			maskedKeys["openrouter"] = maskKey(cfg.APIKey)
+			keysSet = append(keysSet, "openrouter")
+		}
+	}
+	tavilyMasked := ""
+	if cfg.TavilyKey != "" {
+		tavilyMasked = maskKey(cfg.TavilyKey)
+		keysSet = append(keysSet, "_tavily")
+		maskedKeys["_tavily"] = tavilyMasked
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"api_key":        cfg.APIKey,
-		"models":         cfg.Models,
-		"tavily_api_key": cfg.TavilyKey,
-		"provider_keys":  maskedKeys,
+		"models":            cfg.Models,
+		"masked_keys":       maskedKeys,
+		"provider_keys_set": keysSet,
+		"tavily_masked":     tavilyMasked,
 	})
 }
 
 func handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		APIKey       *string           `json:"api_key"`
-		Models       []string          `json:"models"`
-		TavilyKey    *string           `json:"tavily_api_key"`
-		ProviderKeys map[string]string `json:"provider_keys"`
+		APIKey          *string            `json:"api_key"`
+		Models          []string           `json:"models"`
+		TavilyKey       *string            `json:"tavily_api_key"`
+		ProviderKeys    map[string]string  `json:"provider_keys"`
+		AddProviderKey  *struct {
+			Provider string `json:"provider"`
+			Key      string `json:"key"`
+		} `json:"add_provider_key"`
+		RemoveProviderKey *string `json:"remove_provider_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -75,6 +103,45 @@ func handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated := cfg
+
+	if body.AddProviderKey != nil {
+		provider := body.AddProviderKey.Provider
+		key := body.AddProviderKey.Key
+		if provider == "_tavily" {
+			updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: key, ProviderKeys: updated.ProviderKeys}
+		} else {
+			newKeys := make(map[string]string, len(updated.ProviderKeys)+1)
+			for k, v := range updated.ProviderKeys {
+				newKeys[k] = v
+			}
+			newKeys[provider] = key
+			if provider == "openrouter" {
+				updated = config.Config{APIKey: key, Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: newKeys}
+			} else {
+				updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: newKeys}
+			}
+		}
+	}
+
+	if body.RemoveProviderKey != nil {
+		provider := *body.RemoveProviderKey
+		if provider == "_tavily" {
+			updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: "", ProviderKeys: updated.ProviderKeys}
+		} else {
+			newKeys := make(map[string]string, len(updated.ProviderKeys))
+			for k, v := range updated.ProviderKeys {
+				if k != provider {
+					newKeys[k] = v
+				}
+			}
+			if provider == "openrouter" {
+				updated = config.Config{APIKey: "", Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: newKeys}
+			} else {
+				updated = config.Config{APIKey: updated.APIKey, Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: newKeys}
+			}
+		}
+	}
+
 	if body.APIKey != nil {
 		updated = config.Config{APIKey: *body.APIKey, Models: updated.Models, TavilyKey: updated.TavilyKey, ProviderKeys: updated.ProviderKeys}
 	}
@@ -103,15 +170,25 @@ func handleSetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	maskedKeys := make(map[string]bool, len(updated.ProviderKeys))
+	maskedResp := make(map[string]string, len(updated.ProviderKeys))
+	keysSet := make([]string, 0, len(updated.ProviderKeys))
 	for k, v := range updated.ProviderKeys {
-		maskedKeys[k] = v != ""
+		if v != "" {
+			maskedResp[k] = maskKey(v)
+			keysSet = append(keysSet, k)
+		}
+	}
+	tavilyMasked := ""
+	if updated.TavilyKey != "" {
+		tavilyMasked = maskKey(updated.TavilyKey)
+		keysSet = append(keysSet, "_tavily")
+		maskedResp["_tavily"] = tavilyMasked
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"api_key":        updated.APIKey,
-		"models":         updated.Models,
-		"tavily_api_key": updated.TavilyKey,
-		"provider_keys":  maskedKeys,
+		"models":            updated.Models,
+		"masked_keys":       maskedResp,
+		"provider_keys_set": keysSet,
+		"tavily_masked":     tavilyMasked,
 	})
 }
 

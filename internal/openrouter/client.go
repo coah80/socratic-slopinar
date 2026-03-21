@@ -33,8 +33,13 @@ func (c *Client) resolveRequest(modelID string) (url string, resolvedModel strin
 	providerID := DetectProvider(modelID)
 	provider = GetProvider(providerID)
 
-	if providerID == "anthropic" {
+	switch providerID {
+	case "anthropic":
 		log.Printf("[PROVIDER] Anthropic detected for %s, routing through OpenRouter (incompatible API format)", modelID)
+		providerID = "openrouter"
+		provider = GetProvider("openrouter")
+	case "cohere":
+		log.Printf("[PROVIDER] Cohere detected for %s, routing through OpenRouter (v2 API format differences)", modelID)
 		providerID = "openrouter"
 		provider = GetProvider("openrouter")
 	}
@@ -67,12 +72,28 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 		return ChatResponse{}, err
 	}
 
+	tools := req.Tools
+	toolChoice := req.ToolChoice
+	if provider.NoTools {
+		log.Printf("[PROVIDER] %s does not support tools, stripping from request", provider.Name)
+		tools = nil
+		toolChoice = ""
+	}
+
 	r := ChatRequest{
-		Model:      resolvedModel,
-		Messages:   req.Messages,
-		Tools:      req.Tools,
-		Stream:     false,
-		ToolChoice: req.ToolChoice,
+		Model:       resolvedModel,
+		Messages:    req.Messages,
+		Tools:       tools,
+		Stream:      false,
+		ToolChoice:  toolChoice,
+		Temperature: req.Temperature,
+	}
+
+	// DeepSeek works better with temperature 0 when using tool calls
+	if provider.ID == "deepseek" && len(tools) > 0 {
+		zero := 0.0
+		r.Temperature = &zero
+		log.Printf("[PROVIDER] DeepSeek with tools: forcing temperature=0 for reliability")
 	}
 
 	body, err := json.Marshal(r)
@@ -104,6 +125,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return ChatResponse{}, err
 	}
+	normalizeToolCalls(&result)
 	return result, nil
 }
 
@@ -113,12 +135,27 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest) (<-chan Stream
 		return nil, err
 	}
 
+	streamTools := req.Tools
+	streamToolChoice := req.ToolChoice
+	if provider.NoTools {
+		log.Printf("[PROVIDER] %s does not support tools, stripping from stream request", provider.Name)
+		streamTools = nil
+		streamToolChoice = ""
+	}
+
 	r := ChatRequest{
-		Model:      resolvedModel,
-		Messages:   req.Messages,
-		Tools:      req.Tools,
-		Stream:     true,
-		ToolChoice: req.ToolChoice,
+		Model:       resolvedModel,
+		Messages:    req.Messages,
+		Tools:       streamTools,
+		Stream:      true,
+		ToolChoice:  streamToolChoice,
+		Temperature: req.Temperature,
+	}
+
+	if provider.ID == "deepseek" && len(streamTools) > 0 {
+		zero := 0.0
+		r.Temperature = &zero
+		log.Printf("[PROVIDER] DeepSeek with tools: forcing temperature=0 for reliability")
 	}
 
 	body, err := json.Marshal(r)
@@ -176,4 +213,17 @@ func setProviderHeaders(req *http.Request, provider Provider, apiKey string) {
 	req.Header.Set(provider.AuthHeader, provider.AuthPrefix+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("HTTP-Referer", "http://localhost:8080")
+}
+
+// normalizeToolCalls ensures all tool call arguments are valid JSON strings.
+// Some providers return empty arguments or malformed JSON; this normalizes them.
+func normalizeToolCalls(resp *ChatResponse) {
+	for i := range resp.Choices {
+		for j := range resp.Choices[i].Message.ToolCalls {
+			tc := &resp.Choices[i].Message.ToolCalls[j]
+			if tc.Function.Arguments == "" {
+				tc.Function.Arguments = "{}"
+			}
+		}
+	}
 }

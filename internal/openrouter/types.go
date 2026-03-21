@@ -1,11 +1,14 @@
 package openrouter
 
+import "encoding/json"
+
 type ChatRequest struct {
-	Model      string           `json:"model"`
-	Messages   []ChatMessage    `json:"messages"`
-	Tools      []ToolDefinition `json:"tools,omitempty"`
-	Stream     bool             `json:"stream"`
-	ToolChoice string           `json:"tool_choice,omitempty"`
+	Model       string           `json:"model"`
+	Messages    []ChatMessage    `json:"messages"`
+	Tools       []ToolDefinition `json:"tools,omitempty"`
+	Stream      bool             `json:"stream"`
+	ToolChoice  string           `json:"tool_choice,omitempty"`
+	Temperature *float64         `json:"temperature,omitempty"`
 }
 
 type ChatMessage struct {
@@ -24,6 +27,34 @@ type ToolCall struct {
 type FunctionCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// UnmarshalJSON handles providers (e.g. Mistral) that return arguments as a
+// parsed JSON object instead of a string.
+func (fc *FunctionCall) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	fc.Name = r.Name
+
+	if len(r.Arguments) == 0 {
+		fc.Arguments = "{}"
+		return nil
+	}
+
+	// If it's a JSON string, unwrap the quotes; otherwise keep the raw JSON.
+	var s string
+	if err := json.Unmarshal(r.Arguments, &s); err == nil {
+		fc.Arguments = s
+	} else {
+		fc.Arguments = string(r.Arguments)
+	}
+	return nil
 }
 
 type ToolDefinition struct {

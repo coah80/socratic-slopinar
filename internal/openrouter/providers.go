@@ -10,6 +10,7 @@ type Provider struct {
 	AuthPrefix  string
 	Prefixes    []string
 	StripPrefix bool
+	NoTools     bool // provider does not support tool calling
 }
 
 var AllProviders = []Provider{
@@ -86,7 +87,7 @@ var AllProviders = []Provider{
 	{
 		ID:          "minimax",
 		Name:        "MiniMax",
-		BaseURL:     "https://api.minimax.chat/v1/text/chatcompletion_v2",
+		BaseURL:     "https://api.minimax.chat/v1/chat/completions",
 		AuthHeader:  "Authorization",
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"minimax/"},
@@ -109,6 +110,7 @@ var AllProviders = []Provider{
 		AuthPrefix:  "Bearer ",
 		Prefixes:    []string{"perplexity/", "sonar-"},
 		StripPrefix: true,
+		NoTools:     true,
 	},
 	{
 		ID:          "fireworks",

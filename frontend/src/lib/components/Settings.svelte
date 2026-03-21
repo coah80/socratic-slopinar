@@ -1,51 +1,68 @@
 <script lang="ts">
-	import { getConfig, loadConfig, saveConfig, addModel, removeModel } from '$lib/stores/settings.svelte';
+	import { getConfig, loadConfig, addProviderKey, removeProviderKey, addModel, removeModel } from '$lib/stores/settings.svelte';
 	import { PROVIDERS } from '$lib/types';
 	import ProviderLogo from './ProviderLogo.svelte';
 
 	let { onclose }: { onclose: () => void } = $props();
 
-	let providerKeys = $state<Record<string, string>>({});
-	let tavilyKey = $state('');
 	let newModelId = $state('');
-	let visibleKeys = $state<Set<string>>(new Set());
-	let showTavilyKey = $state(false);
+	let addingKey = $state(false);
+	let selectedProvider = $state('');
+	let newKeyValue = $state('');
 	let saving = $state(false);
 
 	const config = $derived(getConfig());
 
+	const configuredProviders = $derived(
+		PROVIDERS.filter(p => config.provider_keys[p.id])
+	);
+
+	const hasTavilyKey = $derived(config.tavily_api_key.length > 0);
+
+	const availableProviders = $derived(
+		PROVIDERS.filter(p => !config.provider_keys[p.id])
+	);
+
+	const isTavilyAvailable = $derived(!hasTavilyKey);
+
 	$effect(() => {
-		loadConfig().then(() => {
-			const c = getConfig();
-			providerKeys = { ...c.provider_keys };
-			tavilyKey = c.tavily_api_key;
-		});
+		loadConfig();
 	});
 
-	function toggleKeyVisibility(providerId: string) {
-		const next = new Set(visibleKeys);
-		if (next.has(providerId)) {
-			next.delete(providerId);
-		} else {
-			next.add(providerId);
-		}
-		visibleKeys = next;
+	function maskKey(key: string): string {
+		if (key.length <= 8) return '***';
+		return key.slice(0, 5) + '...' + key.slice(-3);
 	}
 
-	function updateProviderKey(providerId: string, value: string) {
-		providerKeys = { ...providerKeys, [providerId]: value };
-	}
-
-	async function handleSave() {
+	async function handleAddKey() {
+		if (!selectedProvider || !newKeyValue.trim()) return;
 		saving = true;
-		await saveConfig({
-			api_key: providerKeys.openrouter ?? '',
-			models: config.models,
-			tavily_api_key: tavilyKey,
-			provider_keys: providerKeys,
-		});
+		if (selectedProvider === '_tavily') {
+			await addProviderKey('_tavily', newKeyValue.trim());
+		} else {
+			await addProviderKey(selectedProvider, newKeyValue.trim());
+		}
+		selectedProvider = '';
+		newKeyValue = '';
+		addingKey = false;
 		saving = false;
-		onclose();
+	}
+
+	async function handleRemoveKey(providerId: string) {
+		await removeProviderKey(providerId);
+	}
+
+	async function handleRemoveTavily() {
+		await removeProviderKey('_tavily');
+	}
+
+	function handleKeyInputKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') handleAddKey();
+		if (e.key === 'Escape') {
+			addingKey = false;
+			selectedProvider = '';
+			newKeyValue = '';
+		}
 	}
 
 	async function handleAddModel() {
@@ -79,68 +96,86 @@
 		<div class="modal-body">
 			<div class="field">
 				<!-- svelte-ignore a11y_label_has_associated_control -->
-				<label>API Providers</label>
-				<div class="providers-list">
-					{#each PROVIDERS as provider (provider.id)}
-						{@const keyValue = providerKeys[provider.id] ?? ''}
-						{@const isVisible = visibleKeys.has(provider.id)}
-						<div class="provider-row">
-							<div class="provider-info">
+				<label>API Keys</label>
+				<div class="keys-list">
+					{#each configuredProviders as provider (provider.id)}
+						<div class="key-row">
+							<div class="key-row-left">
 								<ProviderLogo provider={provider.id} size={18} />
-								<span class="provider-name">{provider.name}</span>
-								<span class="key-indicator" class:active={keyValue.length > 0}></span>
+								<span class="key-provider-name">{provider.name}</span>
+								<span class="key-masked">{maskKey(config.provider_keys[provider.id])}</span>
 							</div>
-							<div class="key-input-wrapper">
-								<input
-									type={isVisible ? 'text' : 'password'}
-									value={keyValue}
-									oninput={(e) => updateProviderKey(provider.id, e.currentTarget.value)}
-									placeholder={provider.id === 'openrouter' ? 'sk-or-...' : 'sk-...'}
-									class="input"
-								/>
-								<button class="toggle-vis" onclick={() => toggleKeyVisibility(provider.id)} aria-label={isVisible ? 'Hide' : 'Show'}>
-									{#if isVisible}
-										<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-											<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-											<line x1="1" y1="1" x2="23" y2="23"/>
-										</svg>
-									{:else}
-										<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-											<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-											<circle cx="12" cy="12" r="3"/>
-										</svg>
-									{/if}
-								</button>
-							</div>
+							<button class="key-remove" onclick={() => handleRemoveKey(provider.id)} aria-label="Remove {provider.name} key">
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<line x1="18" y1="6" x2="6" y2="18"/>
+									<line x1="6" y1="6" x2="18" y2="18"/>
+								</svg>
+							</button>
 						</div>
 					{/each}
-				</div>
-			</div>
 
-			<div class="field">
-				<label for="tavily-key">API Key (Tavily)</label>
-				<div class="key-input-wrapper">
-					<input
-						id="tavily-key"
-						type={showTavilyKey ? 'text' : 'password'}
-						bind:value={tavilyKey}
-						placeholder="tvly-..."
-						class="input"
-					/>
-					<button class="toggle-vis" onclick={() => showTavilyKey = !showTavilyKey} aria-label={showTavilyKey ? 'Hide' : 'Show'}>
-						{#if showTavilyKey}
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-								<line x1="1" y1="1" x2="23" y2="23"/>
-							</svg>
-						{:else}
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-								<circle cx="12" cy="12" r="3"/>
-							</svg>
-						{/if}
-					</button>
+					{#if hasTavilyKey}
+						<div class="key-row">
+							<div class="key-row-left">
+								<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--ctp-teal)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<circle cx="11" cy="11" r="8"/>
+									<line x1="21" y1="21" x2="16.65" y2="16.65"/>
+								</svg>
+								<span class="key-provider-name">Tavily</span>
+								<span class="key-masked">{maskKey(config.tavily_api_key)}</span>
+							</div>
+							<button class="key-remove" onclick={handleRemoveTavily} aria-label="Remove Tavily key">
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<line x1="18" y1="6" x2="6" y2="18"/>
+									<line x1="6" y1="6" x2="18" y2="18"/>
+								</svg>
+							</button>
+						</div>
+					{/if}
+
+					{#if configuredProviders.length === 0 && !hasTavilyKey}
+						<p class="no-keys">No API keys configured</p>
+					{/if}
 				</div>
+
+				{#if addingKey}
+					<div class="add-key-form">
+						<select class="input select-input" bind:value={selectedProvider}>
+							<option value="" disabled>Select provider...</option>
+							{#each availableProviders as provider (provider.id)}
+								<option value={provider.id}>{provider.name}</option>
+							{/each}
+							{#if isTavilyAvailable}
+								<option value="_tavily">Tavily (Search)</option>
+							{/if}
+						</select>
+						{#if selectedProvider}
+							<div class="add-key-input-row">
+								<input
+									type="password"
+									bind:value={newKeyValue}
+									placeholder={selectedProvider === '_tavily' ? 'tvly-...' : 'sk-...'}
+									class="input"
+									onkeydown={handleKeyInputKeydown}
+								/>
+								<button class="save-key-btn" onclick={handleAddKey} disabled={saving || !newKeyValue.trim()}>
+									{saving ? '...' : 'Save'}
+								</button>
+								<button class="cancel-key-btn" onclick={() => { addingKey = false; selectedProvider = ''; newKeyValue = ''; }}>
+									Cancel
+								</button>
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<button class="add-key-btn" onclick={() => { addingKey = true; }}>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<line x1="12" y1="5" x2="12" y2="19"/>
+							<line x1="5" y1="12" x2="19" y2="12"/>
+						</svg>
+						Add API Key
+					</button>
+				{/if}
 			</div>
 
 			<div class="field">
@@ -176,10 +211,7 @@
 		</div>
 
 		<div class="modal-footer">
-			<button class="cancel-btn" onclick={onclose}>Cancel</button>
-			<button class="save-btn" onclick={handleSave} disabled={saving}>
-				{saving ? 'Saving...' : 'Save'}
-			</button>
+			<button class="close-footer-btn" onclick={onclose}>Close</button>
 		</div>
 	</div>
 </div>
@@ -262,49 +294,155 @@
 		margin-bottom: 8px;
 	}
 
-	.providers-list {
+	.keys-list {
 		display: flex;
 		flex-direction: column;
-		gap: 6px;
+		gap: 4px;
+		margin-bottom: 10px;
 	}
 
-	.provider-row {
-		padding: 10px 14px;
-		border-radius: 12px;
-		border: 1px solid rgba(69, 71, 90, 0.4);
-		background: rgba(49, 50, 68, 0.25);
-		transition: border-color 0.15s ease;
-	}
-
-	.provider-row:focus-within {
-		border-color: rgba(69, 71, 90, 0.8);
-	}
-
-	.provider-info {
+	.key-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
-		margin-bottom: 8px;
+		justify-content: space-between;
+		padding: 10px 14px;
+		border-radius: 10px;
+		background: rgba(49, 50, 68, 0.25);
+		border: 1px solid rgba(69, 71, 90, 0.3);
 	}
 
-	.provider-name {
+	.key-row-left {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		min-width: 0;
+	}
+
+	.key-provider-name {
 		font-family: var(--font-data);
 		font-size: 13px;
 		font-weight: 600;
 		color: var(--ctp-subtext1);
+		white-space: nowrap;
 	}
 
-	.key-indicator {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--ctp-surface2);
-		margin-left: auto;
-		transition: background 0.15s ease;
+	.key-masked {
+		font-family: var(--font-data);
+		font-size: 12px;
+		color: var(--ctp-overlay1);
+		white-space: nowrap;
 	}
 
-	.key-indicator.active {
-		background: var(--ctp-green);
+	.key-remove {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border-radius: 8px;
+		color: var(--ctp-overlay1);
+		flex-shrink: 0;
+		transition: all 0.15s ease;
+	}
+
+	.key-remove:hover {
+		background: rgba(243, 139, 168, 0.15);
+		color: var(--ctp-red);
+	}
+
+	.no-keys {
+		color: var(--ctp-overlay1);
+		font-size: 13px;
+		font-style: italic;
+		padding: 8px 0;
+	}
+
+	.add-key-btn {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 10px 16px;
+		border: 1px dashed var(--ctp-surface2);
+		background: transparent;
+		border-radius: 10px;
+		font-size: 13px;
+		font-weight: 500;
+		color: var(--ctp-subtext0);
+		transition: all 0.15s ease;
+		width: 100%;
+		justify-content: center;
+	}
+
+	.add-key-btn:hover {
+		border-color: var(--ctp-mauve);
+		color: var(--ctp-mauve);
+		background: rgba(203, 166, 247, 0.05);
+	}
+
+	.add-key-form {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.select-input {
+		appearance: none;
+		-webkit-appearance: none;
+		cursor: pointer;
+		background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236c7086' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+		background-repeat: no-repeat;
+		background-position: right 12px center;
+		padding-right: 32px;
+	}
+
+	.select-input option {
+		background: var(--ctp-surface0);
+		color: var(--ctp-text);
+	}
+
+	.add-key-input-row {
+		display: flex;
+		gap: 8px;
+	}
+
+	.add-key-input-row .input {
+		flex: 1;
+	}
+
+	.save-key-btn {
+		padding: 10px 16px;
+		background: var(--ctp-mauve);
+		border-radius: 10px;
+		font-size: 13px;
+		font-weight: 700;
+		color: var(--ctp-crust);
+		transition: filter 0.15s ease;
+		white-space: nowrap;
+	}
+
+	.save-key-btn:hover {
+		filter: brightness(1.1);
+	}
+
+	.save-key-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.cancel-key-btn {
+		padding: 10px 14px;
+		border: 1px solid var(--ctp-surface1);
+		background: transparent;
+		border-radius: 10px;
+		font-size: 13px;
+		color: var(--ctp-subtext0);
+		transition: all 0.15s ease;
+		white-space: nowrap;
+	}
+
+	.cancel-key-btn:hover {
+		background: var(--ctp-surface0);
+		color: var(--ctp-text);
 	}
 
 	.input {
@@ -326,33 +464,6 @@
 
 	.input::placeholder {
 		color: var(--ctp-overlay1);
-	}
-
-	.key-input-wrapper {
-		position: relative;
-	}
-
-	.key-input-wrapper .input {
-		padding-right: 40px;
-	}
-
-	.toggle-vis {
-		position: absolute;
-		right: 6px;
-		top: 50%;
-		transform: translateY(-50%);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 28px;
-		height: 28px;
-		border-radius: 8px;
-		color: var(--ctp-overlay1);
-		transition: color 0.15s ease;
-	}
-
-	.toggle-vis:hover {
-		color: var(--ctp-text);
 	}
 
 	.models-list {
@@ -433,8 +544,8 @@
 		border-top: 1px solid var(--ctp-surface0);
 	}
 
-	.cancel-btn {
-		padding: 10px 16px;
+	.close-footer-btn {
+		padding: 10px 24px;
 		border: 1px solid var(--ctp-surface1);
 		background: rgba(49, 50, 68, 0.4);
 		border-radius: 12px;
@@ -443,31 +554,8 @@
 		transition: all 0.15s ease;
 	}
 
-	.cancel-btn:hover {
+	.close-footer-btn:hover {
 		background: var(--ctp-surface1);
 		color: var(--ctp-text);
-	}
-
-	.save-btn {
-		padding: 10px 24px;
-		background: var(--ctp-mauve);
-		border-radius: 12px;
-		font-size: 14px;
-		font-weight: 700;
-		color: var(--ctp-crust);
-		transition: filter 0.15s ease;
-	}
-
-	.save-btn:hover {
-		filter: brightness(1.1);
-	}
-
-	.save-btn:active {
-		filter: brightness(0.9);
-	}
-
-	.save-btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
 	}
 </style>

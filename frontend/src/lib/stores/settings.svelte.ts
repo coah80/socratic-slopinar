@@ -23,15 +23,19 @@ export async function loadConfig(): Promise<void> {
 		const res = await fetch('/api/config');
 		if (!res.ok) throw new Error(`Failed to load config: ${res.statusText}`);
 		const data = await res.json();
-		const providerKeys: Record<string, string> = data.provider_keys ?? {};
-		if (data.api_key && !providerKeys.openrouter) {
-			providerKeys.openrouter = data.api_key;
+		const maskedKeys: Record<string, string> = data.masked_keys ?? {};
+		const keysSet: string[] = data.provider_keys_set ?? [];
+		const displayKeys: Record<string, string> = {};
+		for (const id of keysSet) {
+			if (id !== '_tavily') {
+				displayKeys[id] = maskedKeys[id] ?? '***';
+			}
 		}
 		config = {
-			api_key: data.api_key ?? '',
+			api_key: '',
 			models: data.models ?? [],
-			tavily_api_key: data.tavily_api_key ?? '',
-			provider_keys: providerKeys,
+			tavily_api_key: data.tavily_masked ?? '',
+			provider_keys: displayKeys,
 		};
 	} catch (e) {
 		error = e instanceof Error ? e.message : 'Failed to load config';
@@ -55,6 +59,38 @@ export async function saveConfig(newConfig: Config): Promise<void> {
 		error = e instanceof Error ? e.message : 'Failed to save config';
 	} finally {
 		loading = false;
+	}
+}
+
+export async function addProviderKey(provider: string, key: string): Promise<void> {
+	if (!provider || !key.trim()) return;
+	error = null;
+	try {
+		const res = await fetch('/api/config', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ add_provider_key: { provider, key } })
+		});
+		if (!res.ok) throw new Error(`Failed to add key: ${res.statusText}`);
+		await loadConfig();
+	} catch (e) {
+		error = e instanceof Error ? e.message : 'Failed to add key';
+	}
+}
+
+export async function removeProviderKey(provider: string): Promise<void> {
+	if (!provider) return;
+	error = null;
+	try {
+		const res = await fetch('/api/config', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ remove_provider_key: provider })
+		});
+		if (!res.ok) throw new Error(`Failed to remove key: ${res.statusText}`);
+		await loadConfig();
+	} catch (e) {
+		error = e instanceof Error ? e.message : 'Failed to remove key';
 	}
 }
 
